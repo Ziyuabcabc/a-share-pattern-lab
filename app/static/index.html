@@ -20,7 +20,7 @@
     </div>
     <div class="topbar-actions">
       <span class="pill pill-muted" id="runState">未扫描</span>
-      <button class="btn btn-primary" id="btnScan">执行全市场扫描</button>
+      <button class="btn btn-primary" id="btnScan">执行行情扫描</button>
       <button class="btn btn-ghost" id="btnExport">导出 CSV</button>
     </div>
   </div>
@@ -30,9 +30,20 @@
 <section class="card scan-panel" id="scanPanel" hidden>
   <div class="scan-panel-head">
     <div>
-      <h2>全市场扫描</h2>
+      <h2>行情扫描</h2>
       <p class="hint">建议在每个交易日收盘后运行；首次扫描需建立本地缓存，耗时约 5–15 分钟。</p>
     </div>
+    <label class="switch-wrap">
+      <select id="selScope">
+        <option value="">全市场</option>
+        <option value="30,68">创业板 + 科创板</option>
+        <option value="30">创业板</option>
+        <option value="68">科创板</option>
+        <option value="60">沪市主板</option>
+        <option value="00">深市主板</option>
+      </select>
+      <span>扫描范围<br><small>范围越小耗时越短，适合快速验证</small></span>
+    </label>
     <label class="switch-wrap">
       <input type="checkbox" id="chkChips">
       <span>同时抓取筹码集中度<br><small>缺失时对应项计 0 分，耗时显著增加</small></span>

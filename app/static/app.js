@@ -240,10 +240,12 @@ function renderTable() {
    ========================================================================= */
 async function startScan() {
   const withChips = $("chkChips").checked;
+  const scope = $("selScope") ? $("selScope").value : "";
+  const qs = `with_chips=${withChips}${scope ? `&boards=${scope}` : ""}`;
   $("btnScanStart").disabled = true;
   $("scanLog").textContent = "正在启动扫描…";
   try {
-    await post(`/api/scan/run?with_chips=${withChips}`);
+    await post(`/api/scan/run?${qs}`);
     pollScan();
   } catch (e) {
     $("scanLog").textContent = `启动失败：${e.message}`;

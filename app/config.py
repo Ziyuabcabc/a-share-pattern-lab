@@ -83,6 +83,7 @@ MID_SCORE_THRESHOLD = 30     # 中匹配分：30 <= total < 60；低于 30 为�
 FETCH_WORKERS = 8        # 历史K线并发抓取线程数
 FETCH_RETRY = 3          # 单次请求失败重试次数
 FETCH_RETRY_DELAY = 1.5  # 重试间隔（秒）
+DB_COMMIT_EVERY = 200    # 全量拉取阶段每完成 N 只提交一次事务（中断可续传）
 # 行业成分表缓存有效期（小时），过期后重新拉取
 INDUSTRY_CACHE_HOURS = 24 * 7
 # 筹码集中度抓取开关对应的单股数据回看天数

@@ -169,6 +169,42 @@ def fetch_full_klines(code: str) -> list[dict]:
     ]
 
 
+def append_spot_if_missing(conn, code: str, spot_row: pd.Series) -> None:
+    """备用源日K的当日数据可能延迟收录：全量落库后若当日K线缺失，用快照补一根。
+
+    判定条件：缓存最近K线日期不是今天，且快照收盘价与缓存最近收盘价不一致
+    （一致说明快照仍停留在上一交易日，不补）。
+    """
+    last = db.last_kline(conn, code)
+    if last is None:
+        return
+    today = datetime.now().strftime("%Y-%m-%d")
+    if str(last["trade_date"]) >= today:
+        return
+    close = _f(spot_row.get("close"))
+    if close is None:
+        return
+    tol = config.QFQ_DRIFT_TOLERANCE
+    if abs(close - float(last["close"])) <= tol * max(float(last["close"]), 1e-9):
+        return
+    db.upsert_klines(
+        conn,
+        [
+            {
+                "code": code,
+                "trade_date": today,
+                "open": _f(spot_row.get("open")),
+                "high": _f(spot_row.get("high")),
+                "low": _f(spot_row.get("low")),
+                "close": close,
+                "volume": _f(spot_row.get("volume")),
+                "amount": _f(spot_row.get("amount")),
+                "turnover_rate": _f(spot_row.get("turnover_rate")),
+            }
+        ],
+    )
+
+
 def _f(v) -> float | None:
     try:
         if v is None or (isinstance(v, float) and math.isnan(v)):
@@ -261,27 +297,36 @@ def run_scan(
     with_chips: bool = False,
     limit: int | None = None,
     full_refresh: bool = False,
+    boards: list[str] | None = None,
 ) -> dict:
-    """执行全市场扫描，返回运行统计。progress 用于 CLI/接口输出进度。"""
+    """执行全市场/指定板块扫描，返回运行统计。progress 用于 CLI/接口输出进度。
+
+    boards: 需要扫描的板块代码前缀列表（如 ["30", "68"] 表示创业板+科创板），
+    None 表示全市场。范围越小请求量越少，适合先小范围验证。
+    """
     def say(msg: str) -> None:
         logger.info(msg)
         if progress:
             progress(msg)
 
+    board_label = "+".join(boards) if boards else "全市场"
+
     with db.get_conn() as conn:
         run_id = db.create_run(conn)
-        say(f"扫描 #{run_id} 启动")
+        say(f"扫描 #{run_id} 启动（范围：{board_label}）")
 
         # 1. 股票列表与行业/上市天数
         spot = refresh_universe(conn)
         industry_map = _loads(db.meta_get(conn, "industry_map"))
         listing_map = _loads(db.meta_get(conn, "listing_days_map"))
 
-        # 2. 轻量预筛：板块代码 / ST与退市整理 / 停牌
+        # 2. 轻量预筛：板块代码 / ST与退市整理 / 停牌 / 指定板块范围
         candidates: list[tuple[str, pd.Series]] = []
         for _, row in spot.iterrows():
             code = row["code"]
             if not code.startswith(config.KEEP_CODE_PREFIXES):
+                continue
+            if boards and not code.startswith(tuple(boards)):
                 continue
             name = str(row.get("name") or "")
             if any(kw in name.upper() for kw in config.EXCLUDE_NAME_KEYWORDS):
@@ -311,22 +356,31 @@ def run_scan(
                 done = 0
                 for fut in as_completed(futures):
                     done += 1
-                    if done % 500 == 0:
-                        say(f"K线拉取进度 {done}/{len(full_codes)}")
                     code = futures[fut]
                     try:
-                        fetched[code] = fut.result()
+                        rows = fut.result()
                     except data_source.DataSourceError as exc:
                         errors += 1
                         logger.warning("K线拉取失败，跳过: %s - %s", code, exc)
+                        continue
+                    # 边拉边落库并定期提交：中途异常/中断时已拉取的缓存仍在，
+                    # 重跑时 plan_kline_fetch 识别到缓存即走增量路径，无需从头再来
+                    if rows:
+                        db.upsert_klines(conn, rows)
+                        fetched[code] = rows
+                    if done % config.DB_COMMIT_EVERY == 0:
+                        conn.commit()
+                        say(f"K线拉取进度 {done}/{len(full_codes)}")
 
-        # 落库（主线程）
-        for code, rows in fetched.items():
-            if rows:
-                db.upsert_klines(conn, rows)
+        # 快照直填当日K线（主线程）
         for code, plan in plans.items():
             if plan[0] == "append":
                 db.upsert_klines(conn, [plan[1]])
+        # 备用源当日K线可能延迟：全量落库后若当日缺失，用快照补一根
+        spot_index = spot.set_index("code")
+        for code in fetched:
+            if code in spot_index.index:
+                append_spot_if_missing(conn, code, spot_index.loc[code])
 
         # 指标计算与打分（主线程，纯 CPU）
         stocks_table = db.load_stocks(conn)

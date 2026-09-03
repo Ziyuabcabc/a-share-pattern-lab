@@ -33,6 +33,9 @@ def parse_args(argv=None):
                    help="抓取筹码集中度（接口缺失时对应项自动计 0 分）")
     p.add_argument("--limit", type=int, default=None,
                    help="仅处理预筛后前 N 只个股（调试用）")
+    p.add_argument("--boards", type=str, default=None,
+                   help="指定板块代码前缀，逗号分隔（如 30,68 表示创业板+科创板）；"
+                        "缺省为全市场")
     p.add_argument("--full-refresh", action="store_true",
                    help="忽略本地 K 线缓存，全量重拉")
     p.add_argument("--no-export", action="store_true", help="不导出 CSV")
@@ -53,11 +56,16 @@ def main(argv=None) -> int:
     print("仅做历史数据统计与技术指标计算，历史数据不等于未来表现")
     print("=" * 64)
 
+    board_list = (
+        [b.strip() for b in args.boards.split(",") if b.strip()]
+        if args.boards else None
+    )
     stats = scanner.run_scan(
         progress=print,
         with_chips=args.with_chips,
         limit=args.limit,
         full_refresh=args.full_refresh,
+        boards=board_list,
     )
 
     print("-" * 64)

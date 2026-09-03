@@ -20,13 +20,21 @@ _state_lock = threading.Lock()
 _state: dict = {"running": False, "run_id": None, "progress": []}
 
 
-@router.post("/run", summary="触发一次全市场扫描（后台执行）")
+@router.post("/run", summary="触发一次扫描（后台执行，可指定板块范围）")
 def run_scan(
     with_chips: bool = False,
     full_refresh: bool = False,
     limit: int | None = None,
+    boards: str | None = None,
 ):
-    """启动扫描。with_chips=True 时对初筛个股抓取筹码集中度（耗时显著增加）。"""
+    """启动扫描。with_chips=True 时对初筛个股抓取筹码集中度（耗时显著增加）。
+
+    boards: 逗号分隔的板块代码前缀（如 "30,68" 表示创业板+科创板），
+    留空表示全市场。
+    """
+    board_list = (
+        [b.strip() for b in boards.split(",") if b.strip()] if boards else None
+    )
     with _state_lock:
         if _state["running"]:
             raise HTTPException(status_code=409, detail="已有扫描任务在执行中，请稍候")
@@ -39,6 +47,7 @@ def run_scan(
                 with_chips=with_chips,
                 limit=limit,
                 full_refresh=full_refresh,
+                boards=board_list,
             )
             with _state_lock:
                 _state.update({"running": False, "run_id": stats["run_id"]})
