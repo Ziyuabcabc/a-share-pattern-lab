@@ -1,0 +1,19 @@
+# 本地数据与输出（不入库）
+data/
+output/
+*.db
+*.db-wal
+*.db-shm
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+
+# IDE / 系统
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db

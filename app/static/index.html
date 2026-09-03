@@ -1,0 +1,126 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>A股历史形态匹配研究看板</title>
+<link rel="stylesheet" href="/static/app.css">
+</head>
+<body>
+
+<!-- ===================== 顶栏 ===================== -->
+<header class="topbar">
+  <div class="topbar-inner">
+    <div class="brand">
+      <div class="brand-mark">形</div>
+      <div>
+        <h1>A股历史形态匹配研究看板</h1>
+        <p class="brand-sub">本地运行版 · 仅做历史数据统计与指标展示 · 历史数据不等于未来表现</p>
+      </div>
+    </div>
+    <div class="topbar-actions">
+      <span class="pill pill-muted" id="runState">未扫描</span>
+      <button class="btn btn-primary" id="btnScan">执行全市场扫描</button>
+      <button class="btn btn-ghost" id="btnExport">导出 CSV</button>
+    </div>
+  </div>
+</header>
+
+<!-- ===================== 扫描面板（默认收起） ===================== -->
+<section class="card scan-panel" id="scanPanel" hidden>
+  <div class="scan-panel-head">
+    <div>
+      <h2>全市场扫描</h2>
+      <p class="hint">建议在每个交易日收盘后运行；首次扫描需建立本地缓存，耗时约 5–15 分钟。</p>
+    </div>
+    <label class="switch-wrap">
+      <input type="checkbox" id="chkChips">
+      <span>同时抓取筹码集中度<br><small>缺失时对应项计 0 分，耗时显著增加</small></span>
+    </label>
+    <button class="btn btn-primary" id="btnScanStart">开始</button>
+    <button class="btn btn-ghost" id="btnScanClose">收起</button>
+  </div>
+  <pre class="scan-log" id="scanLog">等待启动…</pre>
+</section>
+
+<!-- ===================== 指数条 ===================== -->
+<section class="index-strip" id="indexStrip"></section>
+
+<!-- ===================== 统计卡 ===================== -->
+<section class="stat-strip" id="statStrip"></section>
+
+<!-- ===================== 候选池 ===================== -->
+<section class="card">
+  <div class="card-head">
+    <h2>候选池</h2>
+    <div class="filters">
+      <select id="fBoard"><option value="">全部板块</option></select>
+      <select id="fIndustry"><option value="">全部行业</option></select>
+      <select id="fMinScore">
+        <option value="">全部匹配分</option>
+        <option value="60">≥ 60（高匹配分）</option>
+        <option value="40">≥ 40</option>
+        <option value="30">≥ 30（中匹配分）</option>
+      </select>
+      <select id="fOrder">
+        <option value="desc">匹配分从高到低</option>
+        <option value="asc">匹配分从低到高</option>
+      </select>
+      <input type="search" id="fSearch" placeholder="搜索代码 / 名称">
+    </div>
+  </div>
+  <div class="table-wrap">
+    <table id="poolTable">
+      <thead>
+        <tr>
+          <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
+          <th class="num">综合匹配分</th>
+          <th>形态命中项</th>
+          <th class="num">收盘价</th><th class="num">换手率</th>
+          <th class="num">KDJ-J</th><th class="num">筹码集中度</th>
+          <th>红柱前高收缩<a class="fn" title="历史见顶相关指标，仅供研究，不参与打分">*</a></th>
+        </tr>
+      </thead>
+      <tbody id="poolBody"></tbody>
+    </table>
+    <div class="empty" id="poolEmpty">暂无数据 —— 请先执行全市场扫描</div>
+  </div>
+  <div class="card-foot">
+    <span id="poolCount">—</span>
+    <button class="btn btn-ghost" id="btnMore" hidden>加载更多</button>
+  </div>
+</section>
+
+<!-- ===================== 行业分布 ===================== -->
+<section class="card">
+  <div class="card-head"><h2>候选池行业分布</h2></div>
+  <div class="chart-box" id="industryChart"></div>
+</section>
+
+<footer class="foot">
+  <p>本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，表示当前个股与历史上升段启动样本的特征相似程度，
+     不代表未来上涨概率，不构成任何形式的操作指引。</p>
+  <p><strong>历史数据不等于未来表现。</strong>带 * 字段为历史见顶相关指标，仅供研究。仅限本地运行，请勿部署到公网。</p>
+</footer>
+
+<!-- ===================== 个股明细抽屉 ===================== -->
+<div class="drawer-mask" id="drawerMask"></div>
+<aside class="drawer" id="drawer">
+  <div class="drawer-head">
+    <div>
+      <h2 id="dTitle">—</h2>
+      <p class="hint" id="dSub"></p>
+    </div>
+    <button class="btn btn-ghost" id="btnDrawerClose">关闭</button>
+  </div>
+  <div class="drawer-body">
+    <div class="chip-row" id="dBreakdown"></div>
+    <div class="chart-lg" id="dChart"></div>
+    <p class="hint center">前复权价格 · MACD(3,6,3) · KDJ(9,3,3) · 指标仅做历史展示</p>
+  </div>
+</aside>
+
+<script src="/static/vendor/echarts.min.js"></script>
+<script src="/static/app.js"></script>
+</body>
+</html>
