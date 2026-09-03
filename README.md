@@ -81,12 +81,18 @@ python scan.py
 # 调试：仅处理预筛后前 20 只
 python scan.py --limit 20
 
+# 只扫描指定板块（逗号分隔代码前缀，30=创业板 68=科创板 60=沪市主板 00=深市主板）
+python scan.py --boards 30,68
+
 # 同时抓取筹码集中度（耗时显著增加，接口缺失时对应项自动计 0 分）
 python scan.py --with-chips
 
 # 忽略缓存全量重拉
 python scan.py --full-refresh
 ```
+
+扫描支持**增量续传**：K 线数据边拉取边写入本地缓存（每 200 只提交一次），
+即使中途异常终止，重新运行时已有缓存的股票自动走增量路径，不会重复拉取。
 
 扫描完成后输出统计（高匹配分数量 / 中匹配分数量 / 总候选数），并导出 CSV 到 `output/` 目录。
 
@@ -168,7 +174,7 @@ python dev_preview.py --port 8765
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| POST | `/api/scan/run` | 触发全市场扫描（后台执行，支持 `with_chips` / `full_refresh` / `limit`） |
+| POST | `/api/scan/run` | 触发扫描（后台执行，支持 `with_chips` / `full_refresh` / `limit` / `boards`，如 `boards=30,68` 仅扫描创业板+科创板） |
 | GET | `/api/scan/status` | 扫描进度与最近批次统计 |
 | GET | `/api/pool/` | 候选池列表（支持匹配分下限 / 行业 / 板块 / 排序 / 分页） |
 | GET | `/api/pool/export` | 导出候选池 CSV |
