@@ -3,26 +3,31 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>A股历史形态匹配研究看板</title>
-<link rel="stylesheet" href="/static/app.css?v=1.1.1">
+<title>A 股历史形态匹配研究看板 · 本地运行版</title>
+<link rel="icon" href="data:,">
+<link rel="stylesheet" href="/static/app.css?v=1.2.0">
 </head>
 <body>
 
-<!-- ===================== 顶栏 ===================== -->
+<!-- ===================== 顶部导航区 ===================== -->
 <header class="topbar">
   <div class="topbar-inner">
     <div class="brand">
       <div class="brand-mark">形</div>
-      <div>
-        <h1>A股历史形态匹配研究看板</h1>
-        <p class="brand-sub">本地运行版 · 仅做历史数据统计与指标展示 · 历史数据不等于未来表现</p>
+      <div class="brand-text">
+        <h1>A 股历史形态匹配研究看板</h1>
+        <p class="brand-sub">本地运行版・仅做历史数据统计与指标展示</p>
       </div>
     </div>
     <div class="topbar-actions">
-      <span class="pill pill-muted" id="runState">未扫描</span>
-      <button class="btn btn-primary" id="btnScan">执行行情扫描</button>
+      <span class="pill pill-muted" id="runState">尚未执行扫描</span>
+      <button class="btn btn-primary" id="btnScan">执行全市场扫描</button>
       <button class="btn btn-ghost" id="btnExport">导出 CSV</button>
     </div>
+  </div>
+  <!-- 通栏免责声明 -->
+  <div class="disclaimer-bar" role="note">
+    本工具仅为学术研究用途，不构成任何投资建议，股市有风险，投资需谨慎
   </div>
 </header>
 
@@ -55,9 +60,19 @@
 </section>
 
 <!-- ===================== 宏观参考面板 ===================== -->
-<section class="index-strip" id="indexStrip"></section>
+<section class="card macro-panel">
+  <div class="card-head">
+    <h2>宏观参考面板</h2>
+    <span class="hint" id="macroUpdated"></span>
+  </div>
+  <div class="macro-body">
+    <div class="macro-row" id="macroDomestic"></div>
+    <div class="macro-row macro-row-overseas" id="macroOverseas"></div>
+  </div>
+  <div class="macro-note">仅为市场数据参考，不构成投资建议</div>
+</section>
 
-<!-- ===================== 统计卡 ===================== -->
+<!-- ===================== 统计概览 ===================== -->
 <section class="stat-strip" id="statStrip"></section>
 
 <!-- ===================== 候选池 ===================== -->
@@ -86,7 +101,7 @@
         <tr>
           <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
           <th class="num">综合匹配分</th>
-          <th>指标命中项</th>
+          <th>形态命中项</th>
           <th class="num">收盘价</th><th class="num">换手率</th>
           <th class="num">近5日涨幅</th><th class="num">PE(TTM)</th>
           <th class="num">KDJ-J</th><th class="num">筹码集中度</th>
@@ -105,13 +120,16 @@
 
 <!-- ===================== 行业分布 ===================== -->
 <section class="card">
-  <div class="card-head"><h2>候选池行业分布</h2></div>
+  <div class="card-head">
+    <h2>候选池行业分布</h2>
+    <span class="hint">行业分类口径：申万一级行业（31 个）</span>
+  </div>
   <div class="chart-box" id="industryChart"></div>
 </section>
 
 <footer class="foot">
-  <p>本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，表示当前个股与历史上升段启动样本的特征相似程度，
-     不代表未来上涨概率，不构成任何形式的操作指引。</p>
+  <p>本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，用于表示当前个股与历史上升段启动样本的特征相似程度，
+     不代表未来表现，不构成任何形式的操作指引。</p>
   <p><strong>历史数据不等于未来表现。</strong>带 * 字段为历史见顶相关指标，仅供研究。仅限本地运行，请勿部署到公网。</p>
 </footer>
 
@@ -132,7 +150,7 @@
   </div>
 </aside>
 
-<script src="/static/vendor/echarts.min.js?v=1.1.1"></script>
-<script src="/static/app.js?v=1.1.1"></script>
+<script src="/static/vendor/echarts.min.js?v=1.2.0"></script>
+<script src="/static/app.js?v=1.2.0"></script>
 </body>
 </html>

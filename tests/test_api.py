@@ -7,7 +7,7 @@
 
 from fastapi.testclient import TestClient
 
-from app import db
+from app import db, scanner
 from app.main import app
 
 client = TestClient(app)
@@ -98,9 +98,13 @@ def test_dashboard_page(patched_source):
     resp = client.get("/")
     assert resp.status_code == 200
     html = resp.text
-    assert "A股历史形态匹配研究看板" in html
+    assert "A 股历史形态匹配研究看板" in html
     assert "历史数据不等于未来表现" in html
     assert "候选池" in html
+    # 顶部通栏免责声明与宏观参考面板结构
+    assert "本工具仅为学术研究用途，不构成任何投资建议，股市有风险，投资需谨慎" in html
+    assert 'id="macroDomestic"' in html and 'id="macroOverseas"' in html
+    assert "仅为市场数据参考，不构成投资建议" in html
 
     resp = client.get("/static/app.js")
     assert resp.status_code == 200
@@ -110,3 +114,24 @@ def test_dashboard_page(patched_source):
     # 健康检查从 / 移至 /api/health
     resp = client.get("/api/health")
     assert resp.json()["status"] == "running"
+
+
+def test_stock_detail_carries_profile_and_score(patched_source):
+    """详情接口随明细一并返回档案与三模块得分，抽屉不依赖列表缓存。"""
+    scanner.run_scan(limit=8)
+    with db.get_conn() as conn:
+        run = db.latest_run(conn)
+    items = client.get(f"/api/pool/?run_id={run['id']}&limit=1").json()["items"]
+    code = items[0]["code"]
+
+    body = client.get(f"/api/pool/{code}?days=60").json()
+    assert body["profile"]["code"] == code
+    assert body["profile"]["industry"]          # 行业不允许空值
+    assert body["profile"]["board"]
+    assert body["score"]["total_score"] == items[0]["total_score"]
+    # 三模块拆解字段齐备，供前端得分拆解面板展示
+    bd = body["score"]["breakdown"]
+    assert {"core", "fund", "industry"} <= set(bd)
+    n = len(body["dates"])
+    assert len(body["kline"]["close"]) == n
+    assert len(body["indicators"]["k"]) == n

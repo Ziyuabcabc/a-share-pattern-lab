@@ -6,6 +6,8 @@
 
 from __future__ import annotations
 
+import json
+
 from fastapi import APIRouter, HTTPException, Query
 from fastapi.responses import FileResponse
 
@@ -79,8 +81,26 @@ def stock_detail(code: str, days: int = Query(120, ge=30, le=400)):
     """
     with db.get_conn() as conn:
         rows = db.load_klines(conn, code)
+        result = db.result_for_code(conn, code)
     if not rows:
         raise HTTPException(status_code=404, detail="本地缓存中无该个股数据，请先执行扫描")
+
+    # 档案与得分随详情一并返回：抽屉不依赖列表页缓存，口径始终一致
+    profile = None
+    score = None
+    if result:
+        profile = {
+            "code": result["code"], "name": result["name"],
+            "board": result["board"], "industry": result["industry"],
+        }
+        score = {
+            "pattern_score": result["pattern_score"],
+            "bonus_score": result["bonus_score"],
+            "total_score": result["total_score"],
+            "breakdown": result["breakdown"],
+            "metrics": result["metrics"],
+            "display": result["display"],
+        }
 
     import pandas as pd
 
@@ -105,6 +125,8 @@ def stock_detail(code: str, days: int = Query(120, ge=30, le=400)):
 
     return {
         "code": code,
+        "profile": profile,
+        "score": score,
         "note": config.DISCLAIMER,
         "display_note": config.DISPLAY_FIELD_NOTE,
         "volume_prev_mean_5d": round(vol_prev_mean, 2) if vol_prev_mean == vol_prev_mean else None,

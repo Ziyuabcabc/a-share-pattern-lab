@@ -25,7 +25,7 @@ CHECK_SUFFIXES = {".py", ".md", ".html", ".css", ".js", ".txt", ".toml", ".cfg",
 EXCLUDE_DIRS = {"vendor", "node_modules", ".git", "__pycache__", ".pytest_cache", "data", "output"}
 
 # 词表以「前半 + 后半」片段拆分存储，避免本文件出现完整禁用词而被自检命中。
-# 涵盖：方向指示类、价格承诺类、概率承诺类、荐股类常见表述（中文与英文）。
+# 涵盖：方向指示类、价格承诺类、概率承诺类、荐股类、交易导向类常见表述（中文与英文）。
 _BANNED_PARTS = [
     ["买", "入"],
     ["卖", "出"],
@@ -34,6 +34,8 @@ _BANNED_PARTS = [
     ["逃", "顶"],
     ["目标", "价"],
     ["进", "场"],
+    ["信", "号"],
+    ["标", "的"],
     ["sig", "nal"],
     ["reco", "mmend"],
     ["target pr", "ice"],

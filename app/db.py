@@ -336,6 +336,32 @@ def query_results(
     return out
 
 
+def result_for_code(
+    conn: sqlite3.Connection, code: str, run_id: int | None = None
+) -> dict | None:
+    """取单只个股在指定批次（缺省最近批次）的档案与得分明细。
+
+    供详情接口直接返回，避免详情展示依赖列表页缓存。
+    """
+    if run_id is None:
+        row = latest_run(conn)
+        run_id = int(row["id"]) if row else 0
+    if not run_id:
+        return None
+    r = conn.execute(
+        "SELECT * FROM scan_results WHERE run_id=? AND code=?", (run_id, code)
+    ).fetchone()
+    if not r:
+        return None
+    item = dict(r)
+    item["breakdown"] = json.loads(item["breakdown"] or "{}")
+    item["metrics"] = json.loads(item["metrics"] or "{}")
+    item["display"] = json.loads(item["display"] or "{}")
+    item["industry"] = item.get("industry") or "其他"
+    item["board"] = item.get("board") or _board_by_prefix(item.get("code", ""))
+    return item
+
+
 def _board_by_prefix(code: str) -> str:
     """按代码前缀判定板块（与 scanner.board_of 同口径，避免循环导入）。"""
     return {
