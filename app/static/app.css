@@ -1,6 +1,6 @@
 /* =========================================================================
    A股历史形态匹配研究看板 · 本地运行版
-   设计基调（v1.4.0）：克制、干净的研究型工具界面
+   设计基调（v1.5.0）：克制、干净的研究型工具界面
    —— 浅灰白 / 米白 / 极浅蓝灰底，深石墨黑标题，低饱和蓝强调色；
       白色微冷白卡片、12–16px 圆角、极轻阴影；标题更轻、关键数字更粗。
    涨红跌绿遵循 A 股市场惯例，但使用柔和红 / 柔和绿，不使用亮色。
@@ -164,6 +164,25 @@ body {
 .pill-muted { background: #f1f3f7; color: var(--muted); }
 .pill-run   { background: var(--warn-soft); color: var(--warn); }
 .pill-ok    { background: var(--accent-soft); color: var(--accent); }
+
+/* 语言切换：分段控件，与资讯分类标签同一视觉语言；
+   位于导航右侧，无刷新切换，偏好写入 localStorage */
+.lang-switch {
+  display: inline-flex; align-items: center; gap: 2px; padding: 3px;
+  background: #f1f3f7; border-radius: var(--radius-pill); flex: none;
+}
+.lang-opt {
+  border: none; background: transparent; cursor: pointer;
+  font-family: inherit; font-size: var(--fs-small); font-weight: 600;
+  color: var(--muted); padding: 4px 11px; line-height: 1.35;
+  border-radius: var(--radius-pill);
+  transition: background .15s ease, color .15s ease;
+}
+.lang-opt:hover { color: var(--text-2); }
+.lang-opt.is-on {
+  background: var(--card); color: var(--accent);
+  box-shadow: 0 1px 3px rgba(20, 26, 38, .08);
+}
 
 /* =========================================================================
    页面骨架：所有模块统一收进容器，留白一致
@@ -384,6 +403,16 @@ td.chg-cell { font-size: var(--fs-small); font-weight: 600; }
 }
 .tag.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent-line); }
 
+/* 英文界面适配：拉丁字母比汉字宽，标签略加宽，仍保持 6 个/行、共 2 行 */
+body[data-lang="en"] .tag { width: 45px; font-size: 10px; }
+/* 板块 / 行业列在英文下为市场标准名称，比中文长得多：允许折行并降一级字号，
+   避免被省略号截断后无法辨认（完整名称同时保留在 title 提示中） */
+body[data-lang="en"] td.brd-cell,
+body[data-lang="en"] td.ind-cell {
+  white-space: normal; word-break: break-word;
+  font-size: 10.5px; line-height: 1.34;
+}
+
 .fn {
   color: var(--warn); cursor: help; text-decoration: none; font-weight: 600;
   margin-left: 1px; font-size: 10px; vertical-align: super;
@@ -398,6 +427,17 @@ td.chg-cell { font-size: var(--fs-small); font-weight: 600; }
 /* =========================================================================
    市场资讯（列表卡片，非大图信息流）
    ========================================================================= */
+/* 英文版资讯模块标注：标题保留第三方中文原文，此处显式说明 */
+.news-lang-badge {
+  display: inline-block; margin-left: 8px; vertical-align: 1px;
+  font-size: var(--fs-micro); font-weight: 600; letter-spacing: .01em;
+  color: var(--accent); background: var(--accent-soft);
+  border: 1px solid var(--accent-line);
+  border-radius: var(--radius-pill); padding: 1px 9px;
+}
+/* 显式声明，避免上一条 display 覆盖 [hidden] 的浏览器默认隐藏行为 */
+.news-lang-badge[hidden] { display: none; }
+
 .news-tabs {
   display: flex; gap: 2px; padding: 3px;
   background: #f1f3f7; border-radius: var(--radius-pill);
