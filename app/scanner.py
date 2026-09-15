@@ -211,24 +211,43 @@ def fetch_full_klines(code: str) -> list[dict]:
     ]
 
 
-def append_spot_if_missing(conn, code: str, spot_row: pd.Series) -> None:
-    """备用源日K的当日数据可能延迟收录：全量落库后若当日K线缺失，用快照补一根。
+def sync_spot_day(conn, code: str, spot_row: pd.Series) -> None:
+    """用行情快照同步当日K线：缺失则补一根，已存在则回填备用源缺失字段。
 
-    判定条件：缓存最近K线日期不是今天，且快照收盘价与缓存最近收盘价不一致
-    （一致说明快照仍停留在上一交易日，不补）。
+    两种场景：
+    1. 当日K线尚未收录（备用源延迟）→ 用快照补一根完整K线；
+    2. 当日K线已存在但成交额/换手率为空 → 回填这两个字段。
+
+    场景 2 是必须的：备用源（腾讯）日K不含成交额，若当日K线恰好由
+    全量刷新写入，成交额会一直是 NULL，进而被 compute_stock 当作
+    「停牌或无成交」剔除（曾导致候选池数量异常缩水）。此处统一用
+    快照回填，价格字段不动。
     """
     last = db.last_kline(conn, code)
     if last is None:
         return
-    today = datetime.now().strftime("%Y-%m-%d")
-    if str(last["trade_date"]) >= today:
-        return
     close = _f(spot_row.get("close"))
     if close is None:
         return
+    amount = _f(spot_row.get("amount"))
+    turnover = _f(spot_row.get("turnover_rate"))
+    today = datetime.now().strftime("%Y-%m-%d")
+
+    if str(last["trade_date"]) >= today:
+        # 已有当日K线：仅补齐空字段（NULL 或 0 视为缺失），不覆盖已有数值
+        if (not last["amount"] and amount) or (not last["turnover_rate"] and turnover):
+            conn.execute(
+                "UPDATE klines SET "
+                "amount=COALESCE(NULLIF(amount, 0), ?), "
+                "turnover_rate=COALESCE(NULLIF(turnover_rate, 0), ?) "
+                "WHERE code=? AND trade_date=?",
+                (amount, turnover, code, str(last["trade_date"])),
+            )
+        return
+
     tol = config.QFQ_DRIFT_TOLERANCE
     if abs(close - float(last["close"])) <= tol * max(float(last["close"]), 1e-9):
-        return
+        return  # 快照仍停留在上一交易日，不新增K线
     db.upsert_klines(
         conn,
         [
@@ -240,8 +259,8 @@ def append_spot_if_missing(conn, code: str, spot_row: pd.Series) -> None:
                 "low": _f(spot_row.get("low")),
                 "close": close,
                 "volume": _f(spot_row.get("volume")),
-                "amount": _f(spot_row.get("amount")),
-                "turnover_rate": _f(spot_row.get("turnover_rate")),
+                "amount": amount,
+                "turnover_rate": turnover,
             }
         ],
     )
@@ -289,7 +308,11 @@ def compute_stock(conn, code: str, name: str, spot_row: pd.Series,
     k_s, d_s, j_s = kdj(df["high"], df["low"], df["close"])
     vol_prev_mean, vol_today = volume_stats(df["volume"])
 
-    amount_today = float(df["amount"].iloc[-1])
+    amount_today = _f(df["amount"].iloc[-1]) or 0.0
+    if amount_today <= 0:
+        # 备用源（腾讯）日K不含成交额：用当日行情快照兜底，
+        # 否则会把正常交易的个股误判为「停牌或无成交」而剔除。
+        amount_today = _f(spot_row.get("amount")) or 0.0
     if amount_today <= 0:
         return None  # 停牌或无成交
 
@@ -447,11 +470,14 @@ def run_scan(
         for code, plan in plans.items():
             if plan[0] == "append":
                 db.upsert_klines(conn, [plan[1]])
-        # 备用源当日K线可能延迟：全量落库后若当日缺失，用快照补一根
-        spot_index = spot.set_index("code")
-        for code in fetched:
+        # 当日K线同步：备用源当日K线可能延迟收录，或已收录但缺少
+        # 成交额/换手率字段（腾讯源不提供），统一用行情快照补齐，
+        # 避免当日K线成交额为 0 被误判为停牌而整只剔除。
+        spot_index = spot.drop_duplicates(subset="code", keep="last").set_index("code")
+        for code, _row in candidates:
             if code in spot_index.index:
-                append_spot_if_missing(conn, code, spot_index.loc[code])
+                sync_spot_day(conn, code, spot_index.loc[code])
+        conn.commit()
 
         # 指标计算与打分（主线程，纯 CPU）；PE 行业分位需联网预取
         stocks_table = db.load_stocks(conn)

@@ -4,24 +4,57 @@
 from __future__ import annotations
 
 import json
+from datetime import datetime
 
 from fastapi import APIRouter, HTTPException, Query
 
 from app import data_source, db
 from app.config import DISCLAIMER
+from app.scoring import load_hot_industries
 
 router = APIRouter(prefix="/api/market", tags=["市场数据"])
 
 _INDEX_CACHE_KEY = "index_snapshot_cache"
+# 指数快照短时缓存（秒）：行情源偶发较慢，缓存可避免每次打开看板都等待；
+# 缓存内容自带 cached_at，前端会明确标注数据时间。
+_INDEX_CACHE_TTL_SEC = 300
+
+
+def _read_index_cache(conn) -> dict | None:
+    """读取仍在有效期内的指数快照缓存；过期或损坏返回 None。"""
+    row = conn.execute(
+        "SELECT value FROM meta WHERE key=?", (_INDEX_CACHE_KEY,)
+    ).fetchone()
+    if not row:
+        return None
+    try:
+        cached = json.loads(row["value"])
+        age = (
+            datetime.now() - datetime.fromisoformat(cached["cached_at"])
+        ).total_seconds()
+    except (TypeError, ValueError, KeyError):
+        return None
+    return cached if age <= _INDEX_CACHE_TTL_SEC else None
 
 
 @router.get("/indices", summary="宏观参考面板：国内指数 + 海外/港股指数")
 def indices():
     """国内指数与海外/港股参考指数快照（海外仅展示，不参与个股打分）。
 
-    行情源不可用时回退最近一次成功快照（本地缓存兜底，
-    保证前端宏观面板始终有数值可展示），并标注数据时间。
+    - 优先命中 3 分钟内的本地缓存，避免首页被慢行情源拖住；
+    - 行情源不可用时回退最近一次成功快照（本地缓存兜底，
+      保证前端宏观面板始终有数值可展示），并标注数据时间。
     """
+    with db.get_conn() as conn:
+        cached = _read_index_cache(conn)
+        if cached:
+            return {
+                "items": cached.get("items") or [],
+                "overseas": cached.get("overseas") or [],
+                "cached_at": cached.get("cached_at"),
+                "disclaimer": DISCLAIMER,
+            }
+
     rows: list[dict] = []
     try:
         rows = data_source.fetch_index_snapshot() or []
@@ -36,6 +69,7 @@ def indices():
     cached_at: str | None = None
     with db.get_conn() as conn:
         if rows or overseas:
+            cached_at = _now()
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES(?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -45,7 +79,7 @@ def indices():
                         {
                             "items": rows,
                             "overseas": overseas,
-                            "cached_at": _now(),
+                            "cached_at": cached_at,
                         },
                         ensure_ascii=False,
                     ),
@@ -72,28 +106,45 @@ def indices():
 
 
 def _now() -> str:
-    from datetime import datetime
-
     return datetime.now().isoformat(timespec="seconds")
 
 
 @router.get("/industry-stats", summary="候选池按行业统计")
 def industry_stats(run_id: int | None = None):
+    """候选池行业分布：各行业候选数/平均分/最高分 + 行业覆盖情况。
+
+    行业口径为申万一级（31 个）。覆盖统计用于自查行业匹配完整度：
+    未匹配到行业的样本统一归入「其他」，该比例越低说明行业口径越完整。
+    """
     with db.get_conn() as conn:
         if run_id is None:
-            latest = db.latest_run(conn)
+            latest = db.latest_result_run(conn)
             run_id = int(latest["id"]) if latest else 0
         if run_id == 0:
             raise HTTPException(status_code=404, detail="暂无扫描批次，请先执行扫描")
         items = db.industry_stats(conn, run_id)
-    return {"run_id": run_id, "items": items, "disclaimer": DISCLAIMER}
+    total = sum(int(x["count"]) for x in items)
+    other = sum(int(x["count"]) for x in items if x["industry"] == "其他")
+    return {
+        "run_id": run_id,
+        "items": items,
+        "total": total,
+        "industry_count": sum(1 for x in items if x["industry"] != "其他"),
+        "other_count": other,
+        "other_pct": round(other / total * 100, 2) if total else 0.0,
+        # 热点行业名单随统计一并下发，前端据此在分布图中高亮，
+        # 避免前端重复维护一份名单（配置改动只需改 config/hot_industries.json）
+        "hot_industries": load_hot_industries(),
+        "source_note": "行业分类口径：申万一级行业",
+        "disclaimer": DISCLAIMER,
+    }
 
 
 @router.get("/board-stats", summary="候选池按板块统计")
 def board_stats(run_id: int | None = None):
     with db.get_conn() as conn:
         if run_id is None:
-            latest = db.latest_run(conn)
+            latest = db.latest_result_run(conn)
             run_id = int(latest["id"]) if latest else 0
         if run_id == 0:
             raise HTTPException(status_code=404, detail="暂无扫描批次，请先执行扫描")

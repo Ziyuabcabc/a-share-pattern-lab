@@ -8,6 +8,8 @@
 """
 
 import logging
+import threading
+from contextlib import asynccontextmanager
 
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
@@ -15,12 +17,46 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import API_HOST, API_PORT, PROJECT_ROOT
-from app.routers import market, pool, scan_api
+from app.routers import market, news, pool, scan_api
 
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
 )
+
+logger = logging.getLogger(__name__)
+
+
+def _warm_index_cache() -> None:
+    """后台预热宏观指数快照缓存（失败不影响主流程）。"""
+    try:
+        market.indices()
+        logger.info("宏观指数快照缓存预热完成")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("宏观指数快照预热失败: %s", exc)
+
+
+def _warm_news_cache() -> None:
+    """后台预热市场资讯缓存（失败不影响主流程）。"""
+    try:
+        news.news()
+        logger.info("市场资讯缓存预热完成")
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("市场资讯缓存预热失败: %s", exc)
+
+
+@asynccontextmanager
+async def lifespan(_app: FastAPI):
+    """应用生命周期：启动时后台预热指数快照。
+
+    指数行情源在本机环境下首次请求可能耗时数秒到数十秒；若等用户打开
+    看板时才去拉，宏观面板会长时间停留在占位状态。启动时预热一次，
+    用户打开页面即可命中缓存（预热在线程中执行，不阻塞服务启动）。
+    """
+    threading.Thread(target=_warm_index_cache, daemon=True).start()
+    threading.Thread(target=_warm_news_cache, daemon=True).start()
+    yield
+
 
 app = FastAPI(
     title="A-Share Pattern Lab API",
@@ -31,6 +67,7 @@ app = FastAPI(
         "历史数据不等于未来表现。"
     ),
     version="0.1.0",
+    lifespan=lifespan,
 )
 
 # 仅允许本机访问（本地看板页面跨域调用）
@@ -49,6 +86,7 @@ app.add_middleware(
 app.include_router(pool.router)
 app.include_router(scan_api.router)
 app.include_router(market.router)
+app.include_router(news.router)
 
 # 静态资源（前端看板页面与本地打包的图表库）
 STATIC_DIR = PROJECT_ROOT / "app" / "static"

@@ -266,6 +266,18 @@ def latest_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def latest_result_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
+    """最近一次已成功完成（success）的批次。
+
+    扫描启动时会先插入一条 running 记录但还没有任何结果，读接口若取
+    「最新一条」会命中这个空批次，导致候选池 / 行业分布在扫描期间瞬间
+    清空。因此所有读路径统一取最近一次已完成的批次。
+    """
+    return conn.execute(
+        "SELECT * FROM scan_runs WHERE status='success' ORDER BY id DESC LIMIT 1"
+    ).fetchone()
+
+
 def save_results(
     conn: sqlite3.Connection, run_id: int, results: list[dict]
 ) -> None:
@@ -344,7 +356,7 @@ def result_for_code(
     供详情接口直接返回，避免详情展示依赖列表页缓存。
     """
     if run_id is None:
-        row = latest_run(conn)
+        row = latest_result_run(conn)
         run_id = int(row["id"]) if row else 0
     if not run_id:
         return None

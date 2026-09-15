@@ -5,18 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A 股历史形态匹配研究看板 · 本地运行版</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css?v=1.2.0">
+<link rel="stylesheet" href="/static/app.css?v=1.4.0">
 </head>
 <body>
 
 <!-- ===================== 顶部导航区 ===================== -->
-<header class="topbar">
-  <div class="topbar-inner">
+<header class="topbar" id="topbar">
+  <div class="shell topbar-inner">
     <div class="brand">
       <div class="brand-mark">形</div>
       <div class="brand-text">
         <h1>A 股历史形态匹配研究看板</h1>
-        <p class="brand-sub">本地运行版・仅做历史数据统计与指标展示</p>
+        <p class="brand-sub">本地运行版 · 仅做历史数据统计与指标展示</p>
       </div>
     </div>
     <div class="topbar-actions">
@@ -31,126 +31,177 @@
   </div>
 </header>
 
-<!-- ===================== 扫描面板（默认收起） ===================== -->
-<section class="card scan-panel" id="scanPanel" hidden>
-  <div class="scan-panel-head">
-    <div>
-      <h2>行情扫描</h2>
-      <p class="hint">建议在每个交易日收盘后运行；首次扫描需建立本地缓存，耗时约 5–15 分钟。</p>
+<main class="page">
+
+  <!-- ===================== 扫描面板（默认收起） ===================== -->
+  <section class="card scan-panel" id="scanPanel" hidden>
+    <div class="scan-panel-head">
+      <div>
+        <h2>行情扫描</h2>
+        <p class="hint">建议在每个交易日收盘后运行；首次扫描需建立本地缓存，耗时约 5–15 分钟。</p>
+      </div>
+      <label class="switch-wrap">
+        <select id="selScope" class="filters-select">
+          <option value="">全市场</option>
+          <option value="30,68">创业板 + 科创板</option>
+          <option value="30">创业板</option>
+          <option value="68">科创板</option>
+          <option value="60">沪市主板</option>
+          <option value="00">深市主板</option>
+        </select>
+        <span>扫描范围<br><small>范围越小耗时越短，适合快速验证</small></span>
+      </label>
+      <label class="switch-wrap">
+        <input type="checkbox" id="chkChips">
+        <span>同时抓取筹码集中度<br><small>缺失时对应项计 0 分，耗时显著增加</small></span>
+      </label>
+      <button class="btn btn-primary" id="btnScanStart">开始</button>
+      <button class="btn btn-ghost" id="btnScanClose">收起</button>
     </div>
-    <label class="switch-wrap">
-      <select id="selScope">
-        <option value="">全市场</option>
-        <option value="30,68">创业板 + 科创板</option>
-        <option value="30">创业板</option>
-        <option value="68">科创板</option>
-        <option value="60">沪市主板</option>
-        <option value="00">深市主板</option>
-      </select>
-      <span>扫描范围<br><small>范围越小耗时越短，适合快速验证</small></span>
-    </label>
-    <label class="switch-wrap">
-      <input type="checkbox" id="chkChips">
-      <span>同时抓取筹码集中度<br><small>缺失时对应项计 0 分，耗时显著增加</small></span>
-    </label>
-    <button class="btn btn-primary" id="btnScanStart">开始</button>
-    <button class="btn btn-ghost" id="btnScanClose">收起</button>
-  </div>
-  <pre class="scan-log" id="scanLog">等待启动…</pre>
-</section>
+    <pre class="scan-log" id="scanLog">等待启动…</pre>
+  </section>
 
-<!-- ===================== 宏观参考面板 ===================== -->
-<section class="card macro-panel">
-  <div class="card-head">
-    <h2>宏观参考面板</h2>
-    <span class="hint" id="macroUpdated"></span>
-  </div>
-  <div class="macro-body">
-    <div class="macro-row" id="macroDomestic"></div>
-    <div class="macro-row macro-row-overseas" id="macroOverseas"></div>
-  </div>
-  <div class="macro-note">仅为市场数据参考，不构成投资建议</div>
-</section>
-
-<!-- ===================== 统计概览 ===================== -->
-<section class="stat-strip" id="statStrip"></section>
-
-<!-- ===================== 候选池 ===================== -->
-<section class="card">
-  <div class="card-head">
-    <h2>候选池</h2>
-    <div class="filters">
-      <select id="fBoard"><option value="">全部板块</option></select>
-      <select id="fIndustry"><option value="">全部行业</option></select>
-      <select id="fMinScore">
-        <option value="">全部匹配分</option>
-        <option value="60">≥ 60（高匹配分）</option>
-        <option value="40">≥ 40</option>
-        <option value="30">≥ 30（中匹配分）</option>
-      </select>
-      <select id="fOrder">
-        <option value="desc">匹配分从高到低</option>
-        <option value="asc">匹配分从低到高</option>
-      </select>
-      <input type="search" id="fSearch" placeholder="搜索代码 / 名称">
+  <!-- ===================== 宏观参考面板 ===================== -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">
+        <h2>宏观参考面板</h2>
+        <p class="card-sub">第一行：国内主要指数（点位 + 涨跌幅）；第二行：海外隔夜与港股参考</p>
+      </div>
+      <span class="hint" id="macroUpdated"></span>
     </div>
-  </div>
-  <div class="table-wrap">
-    <table id="poolTable">
-      <thead>
-        <tr>
-          <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
-          <th class="num">综合匹配分</th>
-          <th>形态命中项</th>
-          <th class="num">收盘价</th><th class="num">换手率</th>
-          <th class="num">近5日涨幅</th><th class="num">PE(TTM)</th>
-          <th class="num">KDJ-J</th><th class="num">筹码集中度</th>
-          <th>红柱前高收缩<a class="fn" title="历史见顶相关指标，仅供研究，不参与打分">*</a></th>
-        </tr>
-      </thead>
-      <tbody id="poolBody"></tbody>
-    </table>
-    <div class="empty" id="poolEmpty">暂无数据 —— 请先执行全市场扫描</div>
-  </div>
-  <div class="card-foot">
-    <span id="poolCount">—</span>
-    <button class="btn btn-ghost" id="btnMore" hidden>加载更多</button>
-  </div>
-</section>
+    <div class="card-body">
+      <div class="macro-row" id="macroDomestic"></div>
+      <div class="macro-row macro-row-overseas" id="macroOverseas"></div>
+      <p class="macro-note">仅为市场数据参考，不构成投资建议</p>
+    </div>
+  </section>
 
-<!-- ===================== 行业分布 ===================== -->
-<section class="card">
-  <div class="card-head">
-    <h2>候选池行业分布</h2>
-    <span class="hint">行业分类口径：申万一级行业（31 个）</span>
-  </div>
-  <div class="chart-box" id="industryChart"></div>
-</section>
+  <!-- ===================== 统计概览 ===================== -->
+  <section class="stat-strip" id="statStrip"></section>
 
-<footer class="foot">
-  <p>本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，用于表示当前个股与历史上升段启动样本的特征相似程度，
-     不代表未来表现，不构成任何形式的操作指引。</p>
-  <p><strong>历史数据不等于未来表现。</strong>带 * 字段为历史见顶相关指标，仅供研究。仅限本地运行，请勿部署到公网。</p>
-</footer>
+  <!-- ===================== 候选池 ===================== -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">
+        <h2>候选池</h2>
+        <p class="card-sub" id="poolSub">计分口径 v1.1：核心形态 0–50 + 筹码基本面 0–20 + 行业板块 0–30</p>
+      </div>
+      <div class="filters">
+        <select id="fBoard"><option value="">全部板块</option></select>
+        <select id="fIndustry"><option value="">全部行业</option></select>
+        <select id="fMinScore">
+          <option value="">全部匹配分</option>
+          <option value="60">≥ 60（高匹配分）</option>
+          <option value="40">≥ 40</option>
+          <option value="30">≥ 30（中匹配分）</option>
+        </select>
+        <select id="fOrder">
+          <option value="desc">匹配分从高到低</option>
+          <option value="asc">匹配分从低到高</option>
+        </select>
+        <input type="search" id="fSearch" placeholder="搜索代码 / 名称">
+      </div>
+    </div>
+    <div class="table-wrap">
+      <table id="poolTable">
+        <colgroup>
+          <col style="width:5.5%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:6.5%">
+          <col style="width:9%"><col style="width:25%">
+          <col style="width:5.5%"><col style="width:5.5%"><col style="width:8%"><col style="width:5.5%">
+          <col style="width:5%"><col style="width:6.5%"><col style="width:6%">
+        </colgroup>
+        <thead>
+          <tr>
+            <th>代码</th><th>名称</th><th>板块</th><th>行业</th>
+            <th class="num">综合匹配分</th>
+            <th>指标命中项</th>
+            <th class="num">收盘价</th><th class="num">换手率</th>
+            <th class="num">近5日涨幅</th><th class="num">PE(TTM)</th>
+            <th class="num">KDJ-J</th><th class="num">筹码集中度</th>
+            <th>红柱前高收缩<a class="fn" title="历史见顶相关指标，仅供研究，不参与打分">*</a></th>
+          </tr>
+        </thead>
+        <tbody id="poolBody"></tbody>
+      </table>
+      <div class="empty" id="poolEmpty">暂无数据 —— 请先执行全市场扫描</div>
+    </div>
+    <div class="card-foot">
+      <span id="poolCount">—</span>
+      <button class="btn btn-ghost" id="btnMore" hidden>加载更多</button>
+    </div>
+  </section>
+
+  <!-- ===================== 行业分布 ===================== -->
+  <section class="card">
+    <div class="card-head">
+      <div class="card-title">
+        <h2>候选池行业分布</h2>
+        <p class="card-sub">行业分类口径：申万一级行业（31 个）；命中热点名单的行业以暖色区分</p>
+      </div>
+      <span class="hint" id="indCoverage"></span>
+    </div>
+    <div class="chart-box" id="industryChart"></div>
+  </section>
+
+  <!-- ===================== 市场资讯 ===================== -->
+  <section class="card" id="newsCard">
+    <div class="card-head">
+      <div class="card-title">
+        <h2>市场资讯</h2>
+        <p class="card-sub" id="newsNote">公开财经快讯自动采集并按关键词归类，仅作研究参考</p>
+      </div>
+      <div class="news-tabs" id="newsTabs">
+        <button class="news-tab is-on" data-cat="all">全部</button>
+        <button class="news-tab" data-cat="domestic">国内资讯</button>
+        <button class="news-tab" data-cat="overseas">海外资讯</button>
+        <button class="news-tab" data-cat="macro">宏观资讯</button>
+      </div>
+    </div>
+    <div class="news-list" id="newsList">
+      <div class="news-empty">资讯加载中…</div>
+    </div>
+    <div class="card-foot">
+      <span id="newsMeta">—</span>
+      <span class="hint">资讯为第三方公开内容摘要，不代表本工具观点</span>
+    </div>
+  </section>
+
+  <footer class="foot">
+    <p>本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，用于表示当前个股与历史上升段启动样本的特征相似程度，
+       不代表未来表现，不构成任何形式的操作指引。</p>
+    <p><strong>历史数据不等于未来表现。</strong>带 * 字段为历史见顶相关指标，仅供研究。仅限本地运行，请勿部署到公网。</p>
+  </footer>
+</main>
 
 <!-- ===================== 个股明细抽屉 ===================== -->
 <div class="drawer-mask" id="drawerMask"></div>
-<aside class="drawer" id="drawer">
+<aside class="drawer" id="drawer" aria-hidden="true">
   <div class="drawer-head">
     <div>
       <h2 id="dTitle">—</h2>
-      <p class="hint" id="dSub"></p>
+      <p class="drawer-sub" id="dSub"></p>
     </div>
-    <button class="btn btn-ghost" id="btnDrawerClose">关闭</button>
+    <button class="icon-btn" id="btnDrawerClose" aria-label="关闭">×</button>
   </div>
   <div class="drawer-body">
-    <div class="chip-row" id="dBreakdown"></div>
-    <div class="chart-lg" id="dChart"></div>
-    <p class="hint center">前复权价格 · MACD(3,6,3) · KDJ(9,3,3) · 指标仅做历史展示</p>
+    <!-- 总分概览 + 三模块小计 -->
+    <div class="score-hero" id="dHero"></div>
+    <!-- 三组得分明细：核心形态 / 筹码基本面 / 行业板块 -->
+    <div id="dGroups"></div>
+    <!-- 图表：容器与提示层分离，图表实例始终复用同一 DOM -->
+    <div class="chart-panel">
+      <div class="chart-panel-head">
+        <h3>价格与指标走势</h3>
+        <span class="hint">前复权价格 · MACD(3,6,3) · KDJ(9,3,3)</span>
+      </div>
+      <div class="chart-lg" id="dChart"></div>
+      <div class="chart-msg" id="dChartMsg">正在加载明细数据…</div>
+    </div>
   </div>
 </aside>
 
-<script src="/static/vendor/echarts.min.js?v=1.2.0"></script>
-<script src="/static/app.js?v=1.2.0"></script>
+<script src="/static/vendor/echarts.min.js?v=1.4.0"></script>
+<script src="/static/app.js?v=1.4.0"></script>
 </body>
 </html>

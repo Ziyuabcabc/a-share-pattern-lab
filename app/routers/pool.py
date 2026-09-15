@@ -28,7 +28,7 @@ def list_pool(
 ):
     with db.get_conn() as conn:
         if run_id is None:
-            latest = db.latest_run(conn)
+            latest = db.latest_result_run(conn)
             run_id = int(latest["id"]) if latest else 0
         items = db.query_results(
             conn, run_id=run_id, min_score=min_score, industry=industry,
@@ -47,7 +47,7 @@ def export_pool(
 ):
     with db.get_conn() as conn:
         if run_id is None:
-            latest = db.latest_run(conn)
+            latest = db.latest_result_run(conn)
             run_id = int(latest["id"]) if latest else 0
         items = db.query_results(conn, run_id=run_id, min_score=min_score, limit=100000)
     if not items:
@@ -63,7 +63,7 @@ def export_pool(
 def pool_industries(run_id: int | None = None):
     with db.get_conn() as conn:
         if run_id is None:
-            latest = db.latest_run(conn)
+            latest = db.latest_result_run(conn)
             run_id = int(latest["id"]) if latest else 0
         rows = conn.execute(
             "SELECT DISTINCT industry FROM scan_results "
@@ -74,14 +74,22 @@ def pool_industries(run_id: int | None = None):
 
 
 @router.get("/{code}", summary="单只个股指标明细（K线 + 指标序列）")
-def stock_detail(code: str, days: int = Query(120, ge=30, le=400)):
+def stock_detail(
+    code: str,
+    days: int = Query(120, ge=30, le=400),
+    run_id: int | None = Query(None, description="扫描批次，缺省取最近一次"),
+):
     """返回缓存的日K与对应指标序列，供前端图表展示。
 
     指标展示口径：MACD(3,6,3)、KDJ(9,3,3)、前复权价格。
+
+    run_id 由前端显式传入当前列表所用批次：若扫描恰好在浏览过程中完成，
+    缺省取「最近一次」会指向一个还没有结果的新批次，导致档案与得分缺失、
+    详情面板出现空白。显式传入可保证列表与详情口径始终一致。
     """
     with db.get_conn() as conn:
         rows = db.load_klines(conn, code)
-        result = db.result_for_code(conn, code)
+        result = db.result_for_code(conn, code, run_id=run_id)
     if not rows:
         raise HTTPException(status_code=404, detail="本地缓存中无该个股数据，请先执行扫描")
 
