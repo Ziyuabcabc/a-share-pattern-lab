@@ -45,25 +45,41 @@ EXCLUDE_NAME_KEYWORDS = ("*ST", "ST", "退")  # ST / *ST / 退市整理
 KEEP_CODE_PREFIXES = ("60", "68", "00", "30")
 
 # ---------------------------------------------------------------------------
-# 形态匹配打分（0-60 分）
+# 打分体系 v1.1（总分 100，三大模块；参数集中在此保证口径统一）
 # ---------------------------------------------------------------------------
-SCORE_MACD_GOLD = 20       # MACD金叉且红柱>0（DIF > DEA 且 MACD柱 > 0）
-SCORE_KDJ_GOLD = 15        # KDJ金叉且J<100（K > D 且 J < 100）
-SCORE_VOLUME_SURGE = 15    # 当日成交量 > 1.3 × 近5日成交量均值
+# 【模块一】核心形态匹配分（0-50）
+SCORE_MACD_GOLD = 15       # MACD(3,6,3)金叉且红柱>0（DIF>DEA 且 MACD柱>0）
+SCORE_KDJ_GOLD = 12        # KDJ(9,3,3)金叉且J<100（K>D 且 J<100）
+SCORE_VOLUME_SURGE = 8     # 当日成交量 > 1.3 × 近5日均量
+SCORE_VOLUME_DOUBLE = 5    # 当日成交量 > 2.0 × 近5日均量（叠加项，量能满分13）
 VOLUME_SURGE_RATIO = 1.3
-SCORE_CHIP_CONCENTRATED = 10  # 筹码集中度 ≤ 18%
-CHIP_CONCENTRATION_MAX = 18.0
-
-# ---------------------------------------------------------------------------
-# 增强加分项（0-40 分，仅做排序加分，不做硬性过滤）
-# ---------------------------------------------------------------------------
-BONUS_GROWTH_BOARD = 12       # 创业板(30) / 科创板(68)
-BONUS_CHIP_LOOSE = 12         # 筹码集中度 > 20%
-CHIP_CONCENTRATION_LOOSE = 20.0
-BONUS_VOLUME_ABOVE_MA = 10    # 当日成交量 ≥ 近5日成交量均值
-BONUS_RANGE_COMPACT = 6       # 近40个交易日 最高价/最低价 ≤ 1.8
+VOLUME_DOUBLE_RATIO = 2.0
+SCORE_TURNOVER_HEALTHY = 5    # 当日换手率处于 [3%, 15%] 区间
+TURNOVER_HEALTHY_MIN = 3.0
+TURNOVER_HEALTHY_MAX = 15.0
+SCORE_RANGE_COMPACT = 5    # 近40个交易日 最高价/最低价 <= 1.8
 RANGE_LOOKBACK_DAYS = 40
 RANGE_COMPACT_RATIO = 1.8
+
+# 【模块二】筹码与基本面加分（0-20）
+SCORE_CHIP_CONCENTRATED = 3   # 筹码集中度 <= 18%
+SCORE_CHIP_LOOSE_EXTRA = 5    # 筹码集中度 > 20%（在3分基础上再加5分，满分8）
+CHIP_CONCENTRATION_MAX = 18.0
+CHIP_CONCENTRATION_LOOSE = 20.0
+SCORE_PE_CHEAP = 6            # PE行业分位：低于行业30%分位
+SCORE_PE_MID = 3              # PE行业分位：30%-70% 分位区间
+PE_PERCENTILE_LOW = 30.0
+PE_PERCENTILE_HIGH = 70.0
+PE_MIN_INDUSTRY_PEERS = 5     # 行业内有效PE样本数下限（不足则该项计 0 分）
+SCORE_RETURN5_HEALTHY = 6     # 近5日涨幅处于 [5%, 20%]
+RETURN5_MIN_PCT = 5.0
+RETURN5_MAX_PCT = 20.0
+
+# 【模块三】行业与板块加分（0-30）
+SCORE_GROWTH_BOARD = 8     # 创业板(30) / 科创板(68)
+SCORE_HOT_INDUSTRY = 22    # 所属行业在热点名单内
+# 热点行业名单（可编辑 JSON；行业名支持前缀匹配，如「半导体」可命中同类行业名）
+HOT_INDUSTRIES_PATH = PROJECT_ROOT / "config" / "hot_industries.json"
 
 # ---------------------------------------------------------------------------
 # 附加展示字段参数（仅展示，不参与打分）
@@ -72,7 +88,7 @@ RANGE_COMPACT_RATIO = 1.8
 HIST_PEAK_LOOKBACK_DAYS = 20
 
 # ---------------------------------------------------------------------------
-# 结果分层统计（仅按匹配分做数量统计，用于扫描报告展示）
+# 结果分层统计（v1.1 口径：满分 100）
 # ---------------------------------------------------------------------------
 HIGH_SCORE_THRESHOLD = 60    # 高匹配分：total >= 60
 MID_SCORE_THRESHOLD = 30     # 中匹配分：30 <= total < 60；低于 30 为低匹配分

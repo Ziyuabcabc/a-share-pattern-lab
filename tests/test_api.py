@@ -64,7 +64,7 @@ def test_scan_flow(patched_source):
     # CSV 导出
     resp = client.get(f"/api/pool/export?run_id={run_id}")
     assert resp.status_code == 200
-    assert "形态匹配分" in resp.text
+    assert "核心形态分(50)" in resp.text
 
     # 行业/板块统计
     body = client.get(f"/api/market/industry-stats?run_id={run_id}").json()
@@ -73,9 +73,10 @@ def test_scan_flow(patched_source):
     boards = {item["board"] for item in body["items"]}
     assert "创业板" in boards
 
-    # 指数快照（Mock 数据源）
+    # 指数快照（Mock 数据源；overseas 为空列表）
     body = client.get("/api/market/indices").json()
     assert {i["code"] for i in body["items"]} == {"000001", "399006"}
+    assert body["overseas"] == []
 
     # 个股明细
     body = client.get("/api/pool/600100?days=60").json()

@@ -314,8 +314,18 @@ def query_results(
         item["breakdown"] = json.loads(item["breakdown"] or "{}")
         item["metrics"] = json.loads(item["metrics"] or "{}")
         item["display"] = json.loads(item["display"] or "{}")
+        # 兜底：行业/板块不允许空值（历史批次数据缺失时在读取层补齐）
+        item["industry"] = item.get("industry") or "其他"
+        item["board"] = item.get("board") or _board_by_prefix(item.get("code", ""))
         out.append(item)
     return out
+
+
+def _board_by_prefix(code: str) -> str:
+    """按代码前缀判定板块（与 scanner.board_of 同口径，避免循环导入）。"""
+    return {
+        "60": "沪主板", "68": "科创板", "00": "深主板", "30": "创业板",
+    }.get(str(code)[:2], "其他")
 
 
 def count_results(

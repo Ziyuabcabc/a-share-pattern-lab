@@ -6,7 +6,7 @@ import math
 import pandas as pd
 import pytest
 
-from app import config, data_source
+from app import config, data_source, scoring
 
 KLINE_CACHE: dict[str, pd.DataFrame] = {}
 
@@ -101,6 +101,19 @@ def _fake_fetch_industry_map():
     }
 
 
+def _fake_fetch_pe_map(codes, progress=None):
+    """v1.1：腾讯 PE 行情 mock（行业内样本数 < 5 → 分位计 0 分，由引擎处理）。"""
+    values = {
+        "600100": 15.0, "300100": 40.0, "688100": 90.0,
+        "000100": 30.0, "600200": 25.0, "600300": 20.0, "600400": 35.0,
+    }
+    return {c: values[c] for c in codes if c in values}
+
+
+def _fake_fetch_overseas_indices():
+    return []
+
+
 def _fake_fetch_index_snapshot():
     return [
         {"code": "000001", "name": "上证指数", "close": 3500.0, "change_pct": 0.5, "amount": 6e11},
@@ -119,6 +132,10 @@ def patched_source(monkeypatch, tmp_path):
     monkeypatch.setattr(data_source, "fetch_industry_map", _fake_fetch_industry_map)
     monkeypatch.setattr(data_source, "fetch_chip_concentration", _fake_fetch_chip_concentration)
     monkeypatch.setattr(data_source, "fetch_index_snapshot", _fake_fetch_index_snapshot)
+    monkeypatch.setattr(data_source, "fetch_pe_map", _fake_fetch_pe_map)
+    monkeypatch.setattr(data_source, "fetch_overseas_indices", _fake_fetch_overseas_indices)
+    # 热点行业名单与真实配置文件隔离，保证测试确定性（半导体 → 热点命中）
+    monkeypatch.setattr(scoring, "_hot_industries_cache", ["半导体"])
     monkeypatch.setattr(config, "DB_PATH", tmp_path / "test.db")
     monkeypatch.setattr(config, "OUTPUT_DIR", tmp_path)
     yield tmp_path

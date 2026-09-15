@@ -69,26 +69,34 @@ async function refreshAll() {
 }
 
 /* =========================================================================
-   指数与统计
+   宏观参考面板（国内指数 + 海外/港股参考；海外仅展示，不参与打分）
    ========================================================================= */
+function indexCard(x) {
+  return `
+    <div class="index-card">
+      <div class="name">${x.name}</div>
+      <div class="row">
+        <span class="val ${pctCls(x.change_pct)}">${fmt(x.close)}</span>
+        <span class="chg ${pctCls(x.change_pct)}">${chgText(x.change_pct)}</span>
+      </div>
+    </div>`;
+}
+
 async function loadIndices() {
   const strip = $("indexStrip");
   try {
     const data = await get("/api/market/indices");
-    strip.innerHTML = (data.items || [])
-      .map(
-        (x) => `
-      <div class="index-card">
-        <div class="name">${x.name}</div>
-        <div class="row">
-          <span class="val ${pctCls(x.change_pct)}">${fmt(x.close)}</span>
-          <span class="chg ${pctCls(x.change_pct)}">${chgText(x.change_pct)}</span>
-        </div>
-      </div>`
-      )
-      .join("") || `<div class="index-card"><div class="name">指数数据</div><div class="row"><span class="val flat">--</span></div></div>`;
+    const domestic = (data.items || []).map(indexCard).join("");
+    const overseas = (data.overseas || []).map(indexCard).join("");
+    const cachedNote = data.cached_at
+      ? `<div class="index-cached-note">缓存数据 · ${data.cached_at.slice(5, 16)}</div>`
+      : "";
+    strip.innerHTML =
+      (domestic || overseas)
+        ? domestic + overseas + cachedNote
+        : `<div class="index-card"><div class="name">宏观参考</div><div class="row"><span class="val flat">--</span></div></div>`;
   } catch {
-    strip.innerHTML = `<div class="index-card"><div class="name">指数数据加载失败</div></div>`;
+    strip.innerHTML = `<div class="index-card"><div class="name">宏观参考加载失败</div></div>`;
   }
 }
 
@@ -149,7 +157,7 @@ async function loadFilters() {
       state.industries.map((x) => `<option value="${x}">${x}</option>`).join("");
     if ([...sel.options].some((o) => o.value === cur)) sel.value = cur;
 
-    const boards = ["沪市主板", "深市主板", "创业板", "科创板"];
+    const boards = ["沪主板", "深主板", "创业板", "科创板", "其他"];
     const bsel = $("fBoard");
     bsel.innerHTML =
       '<option value="">全部板块</option>' +
@@ -191,14 +199,22 @@ function renderTable() {
 
   $("poolBody").innerHTML = rows
     .map((x) => {
-      const p = x.pattern_score, b = x.bonus_score, t = x.total_score;
-      const hits = x.breakdown?.pattern || {};
+      const t = x.total_score;
+      const bd = x.breakdown || {};
+      const core = bd.core || {}, fund = bd.fund || {}, ind = bd.industry || {};
       const d = x.display || {};
       const tags = [
-        ["MACD", hits.macd_gold_red],
-        ["KDJ", hits.kdj_gold_j_under_100],
-        ["放量", hits.volume_surge],
-        ["筹码", hits.chip_concentrated],
+        ["MACD", core.macd_gold_red],
+        ["KDJ", core.kdj_gold_j_under_100],
+        ["量1.3x", core.volume_surge_1_3x],
+        ["量2x", core.volume_surge_2x],
+        ["换手", core.turnover_healthy_3_15],
+        ["横盘", core.range_compact_40d],
+        ["筹码低", fund.chip_concentrated_le_18],
+        ["筹码松", fund.chip_loose_gt_20],
+        ["5日涨", fund.return5_healthy_5_20],
+        ["创/科", ind.growth_board],
+        ["热点", ind.hot_industry],
       ]
         .map(([n, on]) => `<span class="tag ${on ? "on" : ""}">${n}${on ? " ✓" : ""}</span>`)
         .join("");
@@ -220,6 +236,8 @@ function renderTable() {
         <td><div class="hit-tags">${tags}</div></td>
         <td class="num">${fmt(x.metrics?.close)}</td>
         <td class="num">${fmt(d.turnover_rate)}%</td>
+        <td class="num">${chgText(x.metrics?.return_5d_pct)}</td>
+        <td class="num">${fmt(x.metrics?.pe)}</td>
         <td class="num">${fmt(d.kdj_j)}</td>
         <td class="num">${x.metrics?.chip_concentration != null ? fmt(x.metrics.chip_concentration) + "%" : "--"}</td>
         <td>${shrink}</td>
@@ -227,7 +245,7 @@ function renderTable() {
     })
     .join("");
 
-  $("poolCount").textContent = `共 ${state.total} 条 · 当前展示 ${rows.length} 条 · 计分口径：形态匹配分 0–60 + 增强加分 0–40`;
+  $("poolCount").textContent = `共 ${state.total} 条 · 当前展示 ${rows.length} 条 · 计分口径 v1.1：核心形态 0–50 + 筹码基本面 0–20 + 行业板块 0–30`;
   $("btnMore").hidden = state.items.length >= state.total;
 
   for (const tr of $("poolBody").querySelectorAll("tr")) {
@@ -323,17 +341,23 @@ async function openDrawer(code) {
   const item = state.items.find((x) => x.code === code);
   if (item) {
     $("dTitle").textContent = `${item.name} · ${item.code}`;
-    $("dSub").textContent = `${item.board || ""} ${item.industry || ""} · 综合匹配分 ${item.total_score}（形态 ${item.pattern_score} + 增强 ${item.bonus_score}）`;
     const bd = item.breakdown || {};
+    const peTierText = { low: "低于行业30%分位", mid: "行业30%-70%分位", high: "高于行业70%分位", missing: "样本不足或缺失" };
+    $("dSub").textContent = `${item.board || ""} ${item.industry || ""} · 综合匹配分 ${item.total_score}/100（核心形态 ${bd.core_score ?? item.pattern_score} + 筹码基本面 ${bd.fund_score ?? 0} + 行业板块 ${bd.industry_score ?? 0}）`;
+    const core = bd.core || {}, fund = bd.fund || {}, ind = bd.industry || {};
     const chips = [
-      ["MACD金叉且红柱大于0", bd.pattern?.macd_gold_red],
-      ["KDJ金叉且J<100", bd.pattern?.kdj_gold_j_under_100],
-      ["当日放量", bd.pattern?.volume_surge],
-      ["筹码集中度≤18%", bd.pattern?.chip_concentrated],
-      ["创业板/科创板", bd.bonus?.growth_board],
-      ["筹码集中度>20%", bd.bonus?.chip_loose],
-      ["量不低于5日均值", bd.bonus?.volume_above_mean],
-      ["近40日横盘", bd.bonus?.range_compact],
+      [`MACD(3,6,3)金叉且红柱>0 +15`, core.macd_gold_red],
+      [`KDJ(9,3,3)金叉且J<100 +12`, core.kdj_gold_j_under_100],
+      [`量能>1.3×5日均量 +8`, core.volume_surge_1_3x],
+      [`量能>2×5日均量 +5`, core.volume_surge_2x],
+      [`换手率3%-15% +5`, core.turnover_healthy_3_15],
+      [`近40日振幅≤1.8 +5`, core.range_compact_40d],
+      [`筹码集中度≤18% +3`, fund.chip_concentrated_le_18],
+      [`筹码集中度>20% 加至8`, fund.chip_loose_gt_20],
+      [`PE行业分位：${peTierText[fund.pe_tier] || peTierText.missing}`, fund.pe_tier === "low" || fund.pe_tier === "mid"],
+      [`近5日涨幅5%-20% +6`, fund.return5_healthy_5_20],
+      [`创业板/科创板 +8`, ind.growth_board],
+      [`热点行业 +22`, ind.hot_industry],
     ]
       .map(([n, on]) => `<span class="chip ${on ? "on" : ""}">${n}${on ? " ✓" : ""}</span>`)
       .join("");

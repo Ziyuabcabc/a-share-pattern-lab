@@ -122,6 +122,12 @@ body {
 .index-card .row { display: flex; align-items: baseline; gap: 10px; margin-top: 4px; }
 .index-card .val { font-size: 24px; font-weight: 700; font-variant-numeric: tabular-nums; }
 .index-card .chg { font-size: 13px; font-weight: 700; }
+/* 宏观面板缓存数据提示（行情源不可用时展示最近成功快照） */
+.index-cached-note {
+  grid-column: 1 / -1;
+  font-size: 12px; color: var(--muted);
+  text-align: right; padding-right: 6px;
+}
 .up   { color: var(--up); }
 .down { color: var(--down); }
 .flat { color: var(--flat); }

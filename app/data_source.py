@@ -302,24 +302,35 @@ _SINA_INDUSTRY_DELAY = 0.15
 
 
 def fetch_industry_map() -> dict[str, str]:
-    """返回 {股票代码: 行业名称}。主源东财板块，异常时回退新浪行业板块。"""
+    """返回 {股票代码: 行业名称}。东财行业板块与新浪行业板块双源合并，
+    覆盖优先：东财逐板块拉取（部分失败不整体放弃），再用新浪行业补缺。"""
+    out: dict[str, str] = {}
+    # 主源：东财行业板块（本机部分子域可达，逐板块失败仅跳过该板块）
     try:
         boards = _retry(ak.stock_board_industry_name_em, retries=2)
     except DataSourceError as exc:
-        logger.warning("东财行业板块不可达，回退新浪行业源: %s", exc)
-        return _industry_from_sina()
-    out: dict[str, str] = {}
-    for _, board in boards.iterrows():
-        board_name = str(board["板块名称"])
-        try:
-            cons = _retry(
-                ak.stock_board_industry_cons_em, symbol=board_name, retries=2
-            )
-        except DataSourceError as exc:
-            logger.warning("行业板块 %s 成分获取失败，跳过: %s", board_name, exc)
-            continue
-        for _, row in cons.iterrows():
-            out[str(row["代码"])] = board_name
+        logger.warning("东财行业板块列表不可达，仅使用新浪行业源: %s", exc)
+        boards = None
+    if boards is not None:
+        for _, board in boards.iterrows():
+            board_name = str(board["板块名称"])
+            try:
+                cons = _retry(
+                    ak.stock_board_industry_cons_em, symbol=board_name, retries=1
+                )
+            except DataSourceError as exc:
+                logger.warning("行业板块 %s 成分获取失败，跳过: %s", board_name, exc)
+                continue
+            for _, row in cons.iterrows():
+                out.setdefault(str(row["代码"]), board_name)
+    # 备源：新浪行业板块，仅补充东财未覆盖的代码（不覆盖已有行业）
+    sina = _industry_from_sina()
+    for code, name in sina.items():
+        out.setdefault(code, name)
+    logger.info(
+        "行业分类合并完成: 覆盖 %s 只（东财 %s + 新浪补缺）",
+        len(out), len(out) - max(0, len(out) - len(sina)),
+    )
     return out
 
 
@@ -345,22 +356,32 @@ def _industry_from_sina() -> dict[str, str]:
         raise DataSourceError(f"新浪行业板块列表失败: {exc}")
 
     out: dict[str, str] = {}
+    failed_boards = 0
     for node, name, num in boards:
         pages = max(1, -(-num // _SINA_PAGE_SIZE))
         got = 0
         for page in range(1, pages + 1):
-            try:
-                resp = _session.get(
-                    _SINA_LIST_URL,
-                    params={
-                        "page": page, "num": _SINA_PAGE_SIZE,
-                        "sort": "symbol", "asc": 1, "node": node,
-                    },
-                    timeout=20,
-                )
-                items = resp.json() or []
-            except Exception as exc:  # noqa: BLE001
-                logger.warning("新浪行业 %s 第 %s 页失败: %s", name, page, exc)
+            items = None
+            # 页面级重试：限流/抖动导致的单页失败不应造成该行业大面积缺股
+            for attempt in range(1, 4):
+                try:
+                    resp = _session.get(
+                        _SINA_LIST_URL,
+                        params={
+                            "page": page, "num": _SINA_PAGE_SIZE,
+                            "sort": "symbol", "asc": 1, "node": node,
+                        },
+                        timeout=20,
+                    )
+                    items = resp.json() or []
+                    break
+                except Exception as exc:  # noqa: BLE001
+                    logger.warning(
+                        "新浪行业 %s 第 %s 页第 %s 次尝试失败: %s",
+                        name, page, attempt, exc,
+                    )
+                    time.sleep(1.0 * attempt)
+            if items is None:
                 break
             for it in items:
                 symbol = str(it.get("symbol", ""))
@@ -370,8 +391,13 @@ def _industry_from_sina() -> dict[str, str]:
             if len(items) < _SINA_PAGE_SIZE:
                 break
             time.sleep(_SINA_INDUSTRY_DELAY)
+        if got < num:
+            failed_boards += 1
         time.sleep(_SINA_INDUSTRY_DELAY)
-    logger.info("新浪行业分类完成: %s 只 / %s 个板块", len(out), len(boards))
+    logger.info(
+        "新浪行业分类完成: %s 只 / %s 个板块（成分不全板块 %s 个）",
+        len(out), len(boards), failed_boards,
+    )
     return out
 
 
@@ -395,6 +421,52 @@ def fetch_chip_concentration(code: str) -> tuple[str, float] | None:
     if value is None or pd.isna(value):
         return None
     return str(last["日期"]), float(value) * (100.0 if float(value) <= 1.0 else 1.0)
+
+
+# ---------------------------------------------------------------------------
+# 批量实时行情（腾讯）：市盈率 TTM（v1.1 PE行业分位数据源）
+# ---------------------------------------------------------------------------
+_QT_BATCH_SIZE = 60   # 腾讯批量行情单次请求的代码数上限（保守值）
+
+
+def fetch_pe_map(codes: list[str], progress=None) -> dict[str, float]:
+    """批量获取个股市盈率 TTM，返回 {code: pe}。单批失败跳过（不中断）。
+
+    腾讯行情字段 [39] 为市盈率（TTM 口径，亏损为负值，由上层过滤）。
+    """
+    out: dict[str, float] = {}
+    total_batches = -(-len(codes) // _QT_BATCH_SIZE)
+    for i in range(0, len(codes), _QT_BATCH_SIZE):
+        batch = codes[i:i + _QT_BATCH_SIZE]
+        symbols = ",".join(_tencent_symbol(c) for c in batch)
+        batch_no = i // _QT_BATCH_SIZE + 1
+        if progress:
+            progress(f"PE行情 {batch_no}/{total_batches} 批")
+        for attempt in range(1, 3):
+            try:
+                resp = _session.get(
+                    "https://qt.gtimg.cn/q=" + symbols, timeout=15
+                )
+                resp.encoding = "gbk"
+                for line in resp.text.split(";"):
+                    line = line.strip()
+                    if "=" not in line or '"' not in line:
+                        continue
+                    fields = line.split('"')[1].split("~")
+                    if len(fields) <= 39:
+                        continue
+                    code = fields[2]
+                    pe = _f(fields[39])
+                    if pe is not None:
+                        out[code] = pe
+                break
+            except Exception as exc:  # noqa: BLE001
+                logger.warning("腾讯PE行情第 %s 批第 %s 次失败: %s",
+                               batch_no, attempt, exc)
+                time.sleep(1.0 * attempt)
+        time.sleep(0.2)
+    logger.info("PE行情获取完成: %s/%s 只", len(out), len(codes))
+    return out
 
 
 # ---------------------------------------------------------------------------
@@ -477,6 +549,53 @@ def _index_from_tencent() -> list[dict]:
                 "close": close,
                 "change_pct": change,
                 "amount": amount * 1e4 if amount else None,  # 腾讯单位: 万元
+            }
+        )
+    return out
+
+
+# 海外/港股参考指数（仅展示，不参与个股打分）：腾讯行情代码
+OVERSEAS_WATCHLIST = {
+    "usIXIC": "纳斯达克",
+    "usINX": "标普500",
+    "hkHSI": "恒生指数",
+}
+
+
+def fetch_overseas_indices() -> list[dict]:
+    """海外隔夜与港股指数快照（名称/点位/涨跌幅）。失败返回空列表。
+
+    注意：腾讯返回的指数代码与请求代码不同（usIXIC -> .IXIC、hkHSI -> HSI），
+    因此按请求顺序与响应行一一对应取名。
+    """
+    codes = list(OVERSEAS_WATCHLIST)
+    try:
+        resp = _session.get(
+            "https://qt.gtimg.cn/q=" + ",".join(codes), timeout=15
+        )
+        resp.encoding = "gbk"
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("海外指数快照失败: %s", exc)
+        return []
+    lines = [
+        ln.strip() for ln in resp.text.split(";")
+        if "=" in ln and '"' in ln
+    ]
+    out = []
+    for req_code, line in zip(codes, lines):
+        fields = line.split('"')[1].split("~")
+        if len(fields) < 33:
+            continue
+        close = _f(fields[3])
+        change = _f(fields[32])
+        if close is None:
+            continue
+        out.append(
+            {
+                "code": req_code,
+                "name": OVERSEAS_WATCHLIST[req_code],
+                "close": close,
+                "change_pct": change,
             }
         )
     return out

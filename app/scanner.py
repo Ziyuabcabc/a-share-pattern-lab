@@ -27,16 +27,21 @@ from app.scoring import StockSnapshot, base_filter_reject_reason, derive_display
 
 logger = logging.getLogger(__name__)
 
+# 板块标签统一按代码前缀判定，保证 100% 有值、与前端筛选项一致
 BOARD_LABELS = {
-    "60": "沪市主板",
+    "60": "沪主板",
     "68": "科创板",
-    "00": "深市主板",
+    "00": "深主板",
     "30": "创业板",
 }
 
+# 行业字段兜底值：对照表与行业映射都匹配不到时统一标注，不允许出现空值
+INDUSTRY_FALLBACK = "其他"
+
 
 def board_of(code: str) -> str:
-    return BOARD_LABELS.get(code[:2], "其他")
+    """按代码前缀判定板块：60 沪主板 / 00 深主板 / 30 创业板 / 68 科创板。"""
+    return BOARD_LABELS.get(code[:2], INDUSTRY_FALLBACK)
 
 
 # ---------------------------------------------------------------------------
@@ -47,17 +52,19 @@ def refresh_universe(conn) -> dict[str, pd.Series]:
     spot = data_source.fetch_spot()
     spot["code"] = spot["code"].astype(str)
 
-    # 行业分类：超过缓存时效才重新拉取（约 86 次请求）
-    if _stale(conn, "industry_updated_at", config.INDUSTRY_CACHE_HOURS):
+    # 独立的「代码-名称-行业-板块」基础信息对照表：
+    # 行业来自新浪行业板块成分接口（独立于K线/行情接口），板块按代码前缀判定，
+    # 全量落库 stocks 表；候选池的行业/板块一律以该表为准。
+    if _stale(conn, "stock_profiles_updated_at", config.INDUSTRY_CACHE_HOURS):
         try:
-            industry_map = data_source.fetch_industry_map()
-            db.meta_set(conn, "industry_map", _dumps(industry_map))
+            n = refresh_stock_profiles(conn)
             db.meta_set(
-                conn, "industry_updated_at", datetime.now().isoformat(timespec="seconds")
+                conn, "stock_profiles_updated_at",
+                datetime.now().isoformat(timespec="seconds"),
             )
-            logger.info("行业分类已刷新：%s 个行业", len(set(industry_map.values())))
+            logger.info("股票基础信息对照表已刷新：%s 只", n)
         except data_source.DataSourceError as exc:
-            logger.warning("行业分类刷新失败，沿用本地缓存: %s", exc)
+            logger.warning("股票基础信息对照表刷新失败，沿用本地缓存: %s", exc)
 
     # 上市天数：带 7 天缓存，失败时降级为 K 线窗口估计
     if _stale(conn, "listing_days_updated_at", config.INDUSTRY_CACHE_HOURS):
@@ -70,6 +77,35 @@ def refresh_universe(conn) -> dict[str, pd.Series]:
             )
 
     return spot
+
+
+def refresh_stock_profiles(conn) -> int:
+    """独立拉取并落库全A股「代码-名称-行业-板块」对照表。
+
+    数据来源（均与K线接口无关）：
+    - 代码/名称：新浪 hs_a 全市场列表
+    - 行业：新浪行业板块成分映射（匹配不到的统一标注「其他」）
+    - 板块：按代码前缀判定（60 沪主板 / 00 深主板 / 30 创业板 / 68 科创板）
+    """
+    industry_map = data_source.fetch_industry_map()
+    spot = data_source.fetch_spot()
+    # 行业映射同步写入 meta 缓存：扫描打分与历史回填共用，避免重复拉取
+    db.meta_set(conn, "industry_map", _dumps(industry_map))
+    rows = []
+    for _, r in spot.iterrows():
+        code = str(r["code"])
+        rows.append(
+            {
+                "code": code,
+                "name": str(r.get("name") or ""),
+                "board": board_of(code),
+                "industry": industry_map.get(code) or INDUSTRY_FALLBACK,
+                "listing_days": None,
+            }
+        )
+    db.upsert_stocks(conn, rows)
+    conn.commit()
+    return len(rows)
 
 
 def _stale(conn, key: str, hours: float) -> bool:
@@ -218,8 +254,16 @@ def _f(v) -> float | None:
 # 指标计算与打分
 # ---------------------------------------------------------------------------
 def compute_stock(conn, code: str, name: str, spot_row: pd.Series,
-                  listing_days: int | None, chip: float | None) -> dict | None:
-    """计算单股指标并打分。返回 None 表示被基础过滤剔除或数据不足。"""
+                  listing_days: int | None, chip: float | None,
+                  industry: str | None = None, pe: float | None = None,
+                  pe_percentile: float | None = None,
+                  use_kline_turnover: bool = False) -> dict | None:
+    """计算单股指标并打分（v1.1 三模块，总分 100）。
+
+    返回 None 表示被基础过滤剔除或数据不足。
+    use_kline_turnover=True 时换手率取自 K 线缓存（离线重算场景），
+    否则取行情快照（实时扫描场景）。
+    """
     rows = db.load_klines(conn, code)
     if len(rows) < 30:  # 指标预热样本不足（含上市天数过滤的情形）
         return None
@@ -243,12 +287,25 @@ def compute_stock(conn, code: str, name: str, spot_row: pd.Series,
     if amount_today <= 0:
         return None  # 停牌或无成交
 
+    # 近5日涨幅（%）：最新收盘 / 5个交易日前收盘 - 1（样本不足时不计）
+    return_5d = None
+    if len(df) >= 6 and float(df["close"].iloc[-6]) > 0:
+        return_5d = round(
+            (float(df["close"].iloc[-1]) / float(df["close"].iloc[-6]) - 1) * 100, 2
+        )
+
+    # 换手率来源：K线缓存（离线重算）或行情快照（实时扫描）
+    if use_kline_turnover:
+        turnover = _f(rows[-1]["turnover_rate"])
+    else:
+        turnover = _f(spot_row.get("turnover_rate"))
+
     snapshot = StockSnapshot(
         code=code,
         name=name,
         listing_days=listing_days,
         amount=amount_today,
-        turnover_rate=_f(spot_row.get("turnover_rate")),
+        turnover_rate=turnover,
         dif=float(dif_s.iloc[-1]),
         dea=float(dea_s.iloc[-1]),
         hist=float(hist_s.iloc[-1]),
@@ -260,6 +317,10 @@ def compute_stock(conn, code: str, name: str, spot_row: pd.Series,
         chip_concentration=chip,
         range_high=float(df["high"].iloc[-config.RANGE_LOOKBACK_DAYS:].max()),
         range_low=float(df["low"].iloc[-config.RANGE_LOOKBACK_DAYS:].min()),
+        industry=industry,
+        pe=pe,
+        pe_percentile=pe_percentile,
+        return_5d_pct=return_5d,
     )
     if base_filter_reject_reason(snapshot):
         return None
@@ -284,6 +345,9 @@ def compute_stock(conn, code: str, name: str, spot_row: pd.Series,
             "volume_today": snapshot.volume_today,
             "volume_prev_mean": snapshot.volume_prev_mean,
             "chip_concentration": chip,
+            "pe": pe,
+            "pe_percentile": pe_percentile,
+            "return_5d_pct": return_5d,
         },
         "display": display,
     }
@@ -382,8 +446,22 @@ def run_scan(
             if code in spot_index.index:
                 append_spot_if_missing(conn, code, spot_index.loc[code])
 
-        # 指标计算与打分（主线程，纯 CPU）
+        # 指标计算与打分（主线程，纯 CPU）；PE 行业分位需联网预取
         stocks_table = db.load_stocks(conn)
+        industry_by_code: dict[str, str] = {}
+        for code, row in candidates:
+            stock_row = stocks_table.get(code)
+            # 行业取值优先级：stocks 对照表 > 行业映射缓存 > 兜底「其他」，不允许空值
+            industry_by_code[code] = (
+                (stock_row["industry"] if stock_row else None)
+                or industry_map.get(code)
+                or INDUSTRY_FALLBACK
+            )
+
+        pe_pct_map, pe_value_map = prepare_pe_percentiles(
+            conn, [c for c, _ in candidates], industry_by_code, progress=say
+        )
+
         for code, row in candidates:
             try:
                 listing_days = listing_map.get(code)
@@ -401,8 +479,12 @@ def run_scan(
                         listing_days = None
                 name = str(row.get("name") or stocks_table.get(code, {"name": ""})["name"])
                 stock_row = stocks_table.get(code)
-                industry = stock_row["industry"] if stock_row else industry_map.get(code)
-                item = compute_stock(conn, code, name, row, listing_days, chip=None)
+                industry = industry_by_code.get(code, INDUSTRY_FALLBACK)
+                item = compute_stock(
+                    conn, code, name, row, listing_days, chip=None,
+                    industry=industry, pe=pe_value_map.get(code),
+                    pe_percentile=pe_pct_map.get(code),
+                )
             except data_source.DataSourceError as exc:
                 errors += 1
                 logger.warning("个股处理失败，跳过: %s", exc)
@@ -426,7 +508,10 @@ def run_scan(
                         _, value = res
                         db.upsert_chips(conn, [{"code": item["code"], "trade_date": res[0], "concentration": value}])
             # 用最新筹码缓存重算（含此前缺失筹码的个股）
-            results = _rescore_with_chips(conn, spot, listing_map, industry_map, results)
+            results = _rescore_with_chips(
+                conn, spot, listing_map, industry_map, results,
+                pe_value_map=pe_value_map, pe_pct_map=pe_pct_map,
+            )
         say(f"筹码数据成功抓取 {chip_fetched} 只")
 
         # 5. 统计与落库
@@ -456,8 +541,51 @@ def run_scan(
         }
 
 
-def _rescore_with_chips(conn, spot, listing_map, industry_map, results) -> list[dict]:
+def prepare_pe_percentiles(
+    conn, codes: list[str], industry_by_code: dict[str, str],
+    progress=None,
+) -> tuple[dict[str, float], dict[str, float]]:
+    """批量获取 PE 并计算行业内截面分位（v1.1 PE行业分位项）。
+
+    返回 (分位表, PE值表)。分位口径：免费源无行业 3 年历史 PE 序列，
+    采用「同行业当日截面分位」近似（行业内有效 PE>0 样本数不足时计 0 分，
+    见 config.PE_MIN_INDUSTRY_PEERS）。行情源不可用时返回空表，
+    对应项全部计 0 分（设计内降级）。
+    """
+    try:
+        pe_map = data_source.fetch_pe_map(list(codes), progress=progress)
+    except Exception as exc:  # noqa: BLE001 —— fetch_pe_map 内部已按批容错
+        logger.warning("PE行情整体失败，PE分位项全部计 0 分: %s", exc)
+        return {}, {}
+    if not pe_map:
+        return {}, {}
+
+    # 行业 -> 有效 PE 列表（PE>0 才有分位意义）
+    peers: dict[str, list[float]] = {}
+    for code, pe in pe_map.items():
+        if pe and pe > 0:
+            peers.setdefault(industry_by_code.get(code, INDUSTRY_FALLBACK), []).append(pe)
+
+    out: dict[str, float] = {}
+    from app.scoring import compute_pe_percentile
+
+    for code, pe in pe_map.items():
+        pct = compute_pe_percentile(pe, peers.get(industry_by_code.get(code, ""), []))
+        if pct is not None:
+            out[code] = pct
+    say = progress or (lambda m: None)
+    say(f"PE行业分位计算完成：覆盖 {len(out)} 只")
+    return out, pe_map
+
+
+def _rescore_with_chips(
+    conn, spot, listing_map, industry_map, results,
+    pe_value_map: dict[str, float] | None = None,
+    pe_pct_map: dict[str, float] | None = None,
+) -> list[dict]:
     """抓取筹码后，结合本地筹码缓存对全部结果重算一遍分数。"""
+    pe_value_map = pe_value_map or {}
+    pe_pct_map = pe_pct_map or {}
     spot_index = spot.set_index("code")
     recomputed: list[dict] = []
     for item in results:
@@ -472,10 +600,17 @@ def _rescore_with_chips(conn, spot, listing_map, industry_map, results) -> list[
             continue
         listing_days = listing_map.get(code)
         item2 = compute_stock(
-            conn, code, item["name"], row, listing_days, chip=chip
+            conn, code, item["name"], row, listing_days, chip=chip,
+            industry=item.get("industry") or industry_map.get(code) or INDUSTRY_FALLBACK,
+            pe=pe_value_map.get(code), pe_percentile=pe_pct_map.get(code),
         )
         if item2:
-            item2["industry"] = item.get("industry") or industry_map.get(code)
+            item2["industry"] = (
+                item.get("industry")
+                or industry_map.get(code)
+                or INDUSTRY_FALLBACK
+            )
+            item2["board"] = board_of(code)
             recomputed.append(item2)
         else:
             recomputed.append(item)
@@ -488,11 +623,26 @@ def _rescore_with_chips(conn, spot, listing_map, industry_map, results) -> list[
 # ---------------------------------------------------------------------------
 EXPORT_COLUMNS = [
     "代码", "名称", "板块", "行业",
-    "形态匹配分", "增强加分", "综合匹配分",
-    "MACD金叉且红柱大于0", "KDJ金叉且J值小于100", "当日放量", "筹码集中度不高于18%",
-    "收盘价", "DIF", "DEA", "MACD柱", "K", "D", "J",
+    "核心形态分(50)", "筹码基本面分(20)", "行业板块分(30)", "综合匹配分(100)",
+    "MACD金叉且红柱大于0", "KDJ金叉且J值小于100",
+    "放量超5日均量1.3倍", "放量超5日均量2倍", "换手率3%-15%", "近40日振幅不超1.8",
+    "筹码集中度不高于18%", "筹码集中度大于20%", "PE行业分位", "近5日涨幅5%-20%",
+    "创业板或科创板", "热点行业",
+    "收盘价", "PE(TTM)", "近5日涨幅%", "当日换手率", "K", "D", "J", "筹码集中度",
     "MACD红柱相对前高收缩", "MACD红柱前高", "当日MACD红柱",
-    "筹码集中度", "当日换手率", "近40日最高价", "近40日最低价",
+    "近40日最高价", "近40日最低价",
+]
+
+# 命中项与展示字段的说明行（与 EXPORT_COLUMNS 一一对应，共 33 列）
+_EXPORT_NOTE_ROW = [
+    "", "", "", "", "", "", "", "",            # 1-8  标识与分数列
+    "", "", "", "", "", "", "", "",            # 9-16 命中项列
+    "low=低于行业30%分位; mid=30%-70%; "
+    "high=高于70%; missing=样本不足或缺失",     # 17  PE行业分位口径
+    "", "", "", "", "", "", "", "",            # 18-25
+    "", "", "",                                # 26-28
+    config.DISPLAY_FIELD_NOTE,                 # 29  红柱收缩（历史见顶相关）
+    "", "", "",                                # 30-33
 ]
 
 
@@ -505,22 +655,36 @@ def export_csv(results: list[dict], path=None) -> str:
     with open(path, "w", newline="", encoding="utf-8-sig") as fh:
         writer = csv.writer(fh)
         writer.writerow(EXPORT_COLUMNS)
-        writer.writerow(["", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "", "",
-                         config.DISPLAY_FIELD_NOTE, "", "", "", "", "", ""])
+        writer.writerow(_EXPORT_NOTE_ROW)
         for r in results:
             bd, m, d = r["breakdown"], r["metrics"], r["display"]
+            core = bd.get("core", {})
+            fund = bd.get("fund", {})
+            ind = bd.get("industry", {})
             writer.writerow([
-                r["code"], r["name"], r.get("board", ""), r.get("industry") or "",
-                r["pattern_score"], r["bonus_score"], r["total_score"],
-                int(bd["pattern"]["macd_gold_red"]),
-                int(bd["pattern"]["kdj_gold_j_under_100"]),
-                int(bd["pattern"]["volume_surge"]),
-                int(bd["pattern"]["chip_concentrated"]),
-                m.get("close"), m.get("dif"), m.get("dea"), m.get("hist"),
+                r["code"], r["name"],
+                r.get("board") or board_of(r["code"]),
+                r.get("industry") or INDUSTRY_FALLBACK,
+                bd.get("core_score", 0), bd.get("fund_score", 0),
+                bd.get("industry_score", 0), r["total_score"],
+                int(bool(core.get("macd_gold_red"))),
+                int(bool(core.get("kdj_gold_j_under_100"))),
+                int(bool(core.get("volume_surge_1_3x"))),
+                int(bool(core.get("volume_surge_2x"))),
+                int(bool(core.get("turnover_healthy_3_15"))),
+                int(bool(core.get("range_compact_40d"))),
+                int(bool(fund.get("chip_concentrated_le_18"))),
+                int(bool(fund.get("chip_loose_gt_20"))),
+                fund.get("pe_tier", "missing"),
+                int(bool(fund.get("return5_healthy_5_20"))),
+                int(bool(ind.get("growth_board"))),
+                int(bool(ind.get("hot_industry"))),
+                m.get("close"), m.get("pe"), m.get("return_5d_pct"),
+                d.get("turnover_rate"),
                 m.get("k"), m.get("d"), m.get("j"),
+                m.get("chip_concentration"),
                 int(bool(d.get("macd_hist_shrink"))),
                 d.get("macd_hist_peak_prev"), d.get("macd_hist_today"),
-                m.get("chip_concentration"), d.get("turnover_rate"),
                 d.get("range_high_40d"), d.get("range_low_40d"),
             ])
     return str(path)
