@@ -57,8 +57,11 @@ app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 @app.get("/", include_in_schema=False)
 def index():
-    """本地看板页面入口。"""
-    return FileResponse(STATIC_DIR / "index.html")
+    """本地看板页面入口（禁止缓存，避免升级后浏览器沿用旧版前端脚本）。"""
+    return FileResponse(
+        STATIC_DIR / "index.html",
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"},
+    )
 
 
 @app.get("/api/health")

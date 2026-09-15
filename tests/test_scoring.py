@@ -207,9 +207,9 @@ def test_main_board_0():
 
 
 def test_hot_industry_prefix_match(monkeypatch):
-    """热点行业：名单前缀匹配命中 +22。"""
-    monkeypatch.setattr(scoring, "_hot_industries_cache", ["半导体"])
-    bd = evaluate(make_snapshot(code="300750", industry="半导体"))
+    """热点行业：名单前缀匹配命中 +22（如「电力」命中「电力设备」）。"""
+    monkeypatch.setattr(scoring, "_hot_industries_cache", ["电力"])
+    bd = evaluate(make_snapshot(code="300750", industry="电力设备"))
     assert bd.ind_hot is True
     assert bd.ind_score == 8 + 22
 
@@ -228,7 +228,7 @@ def test_is_hot_industry_none_safe(monkeypatch):
 # ---------------------------------------------------------------------------
 def test_total_score_range_and_compat():
     """总分 0-100；pattern_score/bonus_score 兼容旧表结构。"""
-    bd = evaluate(make_snapshot(code="300750", industry="半导体", pe_percentile=10.0))
+    bd = evaluate(make_snapshot(code="300750", industry="电子", pe_percentile=10.0))
     assert 0 <= bd.total_score <= 100
     assert bd.pattern_score == bd.core_score
     assert bd.bonus_score == bd.fund_score + bd.ind_score
@@ -241,7 +241,7 @@ def test_max_possible_score_100():
     """极端满分：核心50 + 筹码8 + PE6 + 涨幅6 + 板块8 + 热点22 = 100。"""
     bd = evaluate(
         make_snapshot(
-            code="300750", industry="半导体", pe_percentile=0.0,
+            code="300750", industry="电子", pe_percentile=0.0,
             return_5d_pct=10.0, volume_today=201.0, chip_concentration=25.0,
         )
     )

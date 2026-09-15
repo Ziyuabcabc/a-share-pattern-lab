@@ -302,14 +302,19 @@ _SINA_INDUSTRY_DELAY = 0.15
 
 
 def fetch_industry_map() -> dict[str, str]:
-    """返回 {股票代码: 行业名称}。东财行业板块与新浪行业板块双源合并，
-    覆盖优先：东财逐板块拉取（部分失败不整体放弃），再用新浪行业补缺。"""
-    out: dict[str, str] = {}
-    # 主源：东财行业板块（本机部分子域可达，逐板块失败仅跳过该板块）
+    """返回 {股票代码: 行业名称}。
+
+    覆盖优先级：申万一级行业（主源，31 个行业基本覆盖全市场）>
+    东财行业板块 > 新浪行业板块（仅补缺，不覆盖已有行业）。
+    单一来源部分失败不影响整体，匹配不到的由调用方标注「其他」。
+    """
+    out: dict[str, str] = _industry_from_sw()
+    sw_hits = len(out)
+    # 备源一：东财行业板块（逐板块失败仅跳过该板块）
     try:
         boards = _retry(ak.stock_board_industry_name_em, retries=2)
     except DataSourceError as exc:
-        logger.warning("东财行业板块列表不可达，仅使用新浪行业源: %s", exc)
+        logger.warning("东财行业板块列表不可达，仅使用申万+新浪行业源: %s", exc)
         boards = None
     if boards is not None:
         for _, board in boards.iterrows():
@@ -323,14 +328,45 @@ def fetch_industry_map() -> dict[str, str]:
                 continue
             for _, row in cons.iterrows():
                 out.setdefault(str(row["代码"]), board_name)
-    # 备源：新浪行业板块，仅补充东财未覆盖的代码（不覆盖已有行业）
+    # 备源二：新浪行业板块，仅补充前两源未覆盖的代码
     sina = _industry_from_sina()
     for code, name in sina.items():
         out.setdefault(code, name)
     logger.info(
-        "行业分类合并完成: 覆盖 %s 只（东财 %s + 新浪补缺）",
-        len(out), len(out) - max(0, len(out) - len(sina)),
+        "行业分类合并完成: 覆盖 %s 只（申万一级 %s + 东财/新浪补缺）",
+        len(out), sw_hits,
     )
+    return out
+
+
+def _industry_from_sw() -> dict[str, str]:
+    """申万一级行业成分：行业列表 1 次请求 + 逐行业成分 1 次请求（约 31 次）。
+
+    申万分类对沪深个股覆盖率接近全市场，作为行业主源；
+    单个行业成分失败仅跳过，不影响其他行业。
+    """
+    try:
+        first = _retry(ak.sw_index_first_info, retries=2)
+    except DataSourceError as exc:
+        logger.warning("申万一级行业列表不可达，跳过申万源: %s", exc)
+        return {}
+    out: dict[str, str] = {}
+    failed = 0
+    for _, row in first.iterrows():
+        # 行业代码形如 801010.SI，成分接口接受纯数字代码
+        sw_code = str(row["行业代码"]).split(".")[0]
+        industry_name = str(row["行业名称"])
+        try:
+            cons = _retry(ak.index_component_sw, symbol=sw_code, retries=2)
+        except DataSourceError as exc:
+            logger.warning("申万行业 %s 成分获取失败，跳过: %s", industry_name, exc)
+            failed += 1
+            continue
+        for _, item in cons.iterrows():
+            # 证券代码统一 6 位字符串（不足补前导零）
+            out.setdefault(str(item["证券代码"]).zfill(6), industry_name)
+        time.sleep(0.2)
+    logger.info("申万一级行业成分完成: %s 只 / 失败行业 %s 个", len(out), failed)
     return out
 
 

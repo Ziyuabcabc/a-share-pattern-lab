@@ -33,10 +33,14 @@ def main() -> None:
         print(f"K线缓存股票: {len(codes)} 只（沿用缓存，不重新拉取）")
 
         stocks_table = db.load_stocks(conn)
+        # 行业兜底链：stocks 对照表 → 行业映射缓存（申万主源） → 「其他」
+        # （stocks 可能因列表分页失败而滞后，meta 缓存的行业映射更全）
+        industry_map_meta = scanner._loads(db.meta_get(conn, "industry_map_v2")) or {}
 
         def industry_of(code: str) -> str:
             row = stocks_table.get(code)
-            return (row["industry"] if row else None) or scanner.INDUSTRY_FALLBACK
+            base = (row["industry"] if row else None) or industry_map_meta.get(code)
+            return base or scanner.INDUSTRY_FALLBACK
 
         industry_by_code = {c: industry_of(c) for c in codes}
         listing_map = scanner._loads(db.meta_get(conn, "listing_days_map"))

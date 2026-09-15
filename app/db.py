@@ -88,14 +88,29 @@ CREATE INDEX IF NOT EXISTS idx_klines_code_date ON klines(code, trade_date);
 """
 
 
+_SCHEMA_READY_FOR: str | None = None  # 已执行过建表语句的库路径（详见 connect 说明）
+
+
 def connect(db_path=None) -> sqlite3.Connection:
-    """建立 SQLite 连接（自动建库建表，开启 WAL 提升并发读写）。"""
+    """建立 SQLite 连接（自动建库建表，开启 WAL 提升并发读写）。
+
+    - WAL：允许扫描线程写库的同时接口线程读库，互不阻塞。
+    - busy_timeout：写事务短暂持锁时等待而非立即报 locked（此前扫描期间
+      点开个股详情偶发「明细数据加载失败」即由此导致）。
+    - 建表语句：同一库文件仅在进程内首次连接时执行一次；每次连接都执行
+      会在扫描写事务进行中因申请写锁而失败。
+    """
+    global _SCHEMA_READY_FOR
     path = db_path or config.DB_PATH
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(str(path), check_same_thread=False)
+    conn = sqlite3.connect(str(path), check_same_thread=False, timeout=10)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA journal_mode=WAL")
-    conn.executescript(_SCHEMA)
+    conn.execute("PRAGMA synchronous=NORMAL")
+    conn.execute("PRAGMA busy_timeout=8000")
+    if _SCHEMA_READY_FOR != str(path):
+        conn.executescript(_SCHEMA)
+        _SCHEMA_READY_FOR = str(path)
     return conn
 
 

@@ -84,13 +84,19 @@ def refresh_stock_profiles(conn) -> int:
 
     数据来源（均与K线接口无关）：
     - 代码/名称：新浪 hs_a 全市场列表
-    - 行业：新浪行业板块成分映射（匹配不到的统一标注「其他」）
+    - 行业：申万一级行业成分（主源）+ 东财/新浪行业板块补缺，
+      匹配不到的统一标注「其他」
     - 板块：按代码前缀判定（60 沪主板 / 00 深主板 / 30 创业板 / 68 科创板）
     """
     industry_map = data_source.fetch_industry_map()
     spot = data_source.fetch_spot()
-    # 行业映射同步写入 meta 缓存：扫描打分与历史回填共用，避免重复拉取
-    db.meta_set(conn, "industry_map", _dumps(industry_map))
+    # 行业映射同步写入 meta 缓存（v2 = 申万一级主源版本）：
+    # 扫描打分与历史回填共用，避免重复拉取
+    db.meta_set(conn, "industry_map_v2", _dumps(industry_map))
+    db.meta_set(
+        conn, "industry_map_v2_updated_at",
+        datetime.now().isoformat(timespec="seconds"),
+    )
     rows = []
     for _, r in spot.iterrows():
         code = str(r["code"])
@@ -381,7 +387,8 @@ def run_scan(
 
         # 1. 股票列表与行业/上市天数
         spot = refresh_universe(conn)
-        industry_map = _loads(db.meta_get(conn, "industry_map"))
+        # 行业映射 v2（申万一级主源）；对照表 stocks 优先，映射仅作回退
+        industry_map = _loads(db.meta_get(conn, "industry_map_v2"))
         listing_map = _loads(db.meta_get(conn, "listing_days_map"))
 
         # 2. 轻量预筛：板块代码 / ST与退市整理 / 停牌 / 指定板块范围

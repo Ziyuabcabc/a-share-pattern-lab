@@ -475,13 +475,27 @@ function resizeCharts() {
 }
 
 /* ---------------- 请求封装 ---------------- */
-async function get(url) {
-  const r = await fetch(url);
-  if (!r.ok) {
+/* GET 自动重试：网络抖动或扫描期间数据库短暂繁忙（5xx）时重试一次，
+   404 等确定性错误不重试，直接抛出。 */
+async function get(url, retries = 1) {
+  for (let attempt = 0; ; attempt++) {
+    let r;
+    try {
+      r = await fetch(url);
+    } catch (e) {
+      // 网络层异常（服务重启中等），按可重试处理
+      if (attempt >= retries) throw e;
+      await new Promise((res) => setTimeout(res, 600));
+      continue;
+    }
+    if (r.ok) return r.json();
+    if (r.status >= 500 && attempt < retries) {
+      await new Promise((res) => setTimeout(res, 600));
+      continue;
+    }
     const body = await r.json().catch(() => ({}));
     throw new Error(body.detail || `HTTP ${r.status}`);
   }
-  return r.json();
 }
 
 async function post(url) {
