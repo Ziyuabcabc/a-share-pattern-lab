@@ -574,10 +574,18 @@ def test_frontend_analysis_endpoints_referenced():
 
 
 def test_static_asset_version_bumped():
-    """静态资源版本号必须升到 1.7.0，否则浏览器会命中旧缓存。"""
+    """静态资源版本号必须与 app.js 声明的版本一致，否则浏览器会命中旧缓存。
+
+    版本号以 app.js 头部注释为唯一事实来源，避免每次升级都要改测试。
+    """
     html = (ROOT / "app" / "static" / "index.html").read_text(encoding="utf-8")
+    js = (ROOT / "app" / "static" / "app.js").read_text(encoding="utf-8")
+    m = re.search(r"版本：v(\d+\.\d+\.\d+)", js)
+    assert m, "app.js 头部未找到版本号声明"
     versions = set(re.findall(r"\?v=([\d.]+)", html))
-    assert versions == {"1.7.0"}, f"静态资源版本号不一致：{versions}"
+    assert versions == {m.group(1)}, (
+        f"静态资源版本号与 app.js 声明不一致：html={sorted(versions)} js={m.group(1)}"
+    )
 
 
 # ===========================================================================

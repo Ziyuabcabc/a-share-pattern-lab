@@ -2,8 +2,8 @@
    A股历史形态匹配研究看板 · 前端逻辑（本地运行版）
    数据来源：本地 FastAPI 接口（/api/*），全部为历史统计与指标展示。
    分数含义：与历史上升段启动样本的特征相似程度，不代表未来表现。
-   版本：v1.7.0（新增分行业回测、统计显著性检验、参数敏感性分析、多周期共振；
-   保留 v1.6.1 研究简报与 v1.6.0 历史回测及 v1.5.0 全部功能）
+   版本：v1.8.0（页面结构优化：单页长滚动 → 顶部导航标签页，纯前端布局调整，
+   打分逻辑、数据接口与各模块交互均保持不变；保留 v1.7.0 四项研究能力）
 
    双语实现约定：
    - 所有界面文案走 I18N.t()（语言包见 static/i18n.js），页面内不散落文案；
@@ -68,6 +68,12 @@ const state = {
   btChart: null,          // 回测净值曲线图实例
   btMode: "tier",         // 回测对比口径：tier=三档分档绩效，resonance=日线+周线共振
   repMeta: "",            // 研究简报最近一次导出时间
+  tab: "pool",            // 当前标签页（v1.8.0）
+  /* 内嵌简报预览的加载守卫：用独立布尔位 + 批次快照，
+     不能只比较「上次批次 === 当前批次」——两者初始同为 null 时，
+     首次加载会被误判成「已加载」而直接返回。 */
+  repFrameLoaded: false,
+  repFrameKey: "",
 
   /* v1.7.0 研究深度分析（四项，各自独立加载、互不阻塞） */
   industry: null,         // 分行业回测
@@ -93,6 +99,16 @@ const pctCls = (v) => (Number(v) > 0 ? "up" : Number(v) < 0 ? "down" : "flat");
 const esc = (s) => String(s == null ? "" : s).replace(/[&<>"]/g, (c) =>
   ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;" }[c]));
 
+/* 内联 SVG 功能图标：统一描边、随字号缩放、继承 currentColor。
+   团队 P0 规则要求功能图标不得使用 emoji，也不宜用打字机符号充当图标
+   （此前命中状态用的是 U+2713 字符），故命中 / 一致等状态一律走这里。 */
+const ICON = {
+  check: (size = 11) =>
+    `<svg class="ico" width="${size}" height="${size}" viewBox="0 0 16 16" fill="none" `
+    + `stroke="currentColor" stroke-width="2.2" stroke-linecap="round" `
+    + `stroke-linejoin="round" aria-hidden="true" focusable="false"><path d="M3 8.6l3.3 3.3L13 5"/></svg>`,
+};
+
 /* 涨跌文案遵循 A 股惯例：涨红跌绿 */
 function chgText(v) {
   if (v === null || v === undefined || Number.isNaN(Number(v))) return "--";
@@ -115,11 +131,16 @@ document.addEventListener("DOMContentLoaded", () => {
 function bindEvents() {
   $("btnScan").addEventListener("click", () => {
     $("scanPanel").hidden = false;
-    $("scanPanel").scrollIntoView({ behavior: "smooth", block: "nearest" });
+    // 扫描面板位于主导航之上，回到页首即可完整露出（顶部导航为吸顶）
+    window.scrollTo({ top: 0, behavior: "smooth" });
   });
   $("btnScanClose").addEventListener("click", () => { $("scanPanel").hidden = true; });
   $("btnScanStart").addEventListener("click", startScan);
   $("btnExport").addEventListener("click", exportCsv);
+  $("btnRepInline").addEventListener("click", () => loadReportFrame(true));
+
+  // 顶部导航标签页（v1.8.0）：纯前端切换
+  initTabs();
 
   for (const id of ["fBoard", "fIndustry", "fMinScore", "fOrder"]) {
     $(id).addEventListener("change", () => { state.offset = 0; loadPool(); });
@@ -161,6 +182,97 @@ function debounce(fn, ms) {
   return (...args) => { clearTimeout(timer); timer = setTimeout(() => fn(...args), ms); };
 }
 
+/* =========================================================================
+   顶部导航标签页（v1.8.0）
+   -------------------------------------------------------------------------
+   把原来的单页长滚动拆成 5 个标签页，减少纵向滚动、提升各模块可达性。
+   切换为纯前端行为：不刷新页面、不重新请求接口，所有数据仍按原逻辑在首屏
+   一次性加载并缓存在 state 中；各模块内部的功能与交互完全保持不变。
+   默认进入「候选池选股」页，可用 URL hash 直达（#pool / #backtest / ...）。
+   ========================================================================= */
+const TABS = ["pool", "backtest", "report", "market", "settings"];
+const DEFAULT_TAB = "pool";
+
+/** 路径参数 → 合法标签页（非法值一律回落到默认页） */
+function currentTabFromHash() {
+  const h = (window.location.hash || "").replace(/^#/, "").trim();
+  return TABS.indexOf(h) >= 0 ? h : DEFAULT_TAB;
+}
+
+/** 切换标签页；opts.silent 用于浏览器前进/后退触发的切换（不再回写 URL） */
+function switchTab(name, opts) {
+  const o = opts || {};
+  const tab = TABS.indexOf(name) >= 0 ? name : DEFAULT_TAB;
+  state.tab = tab;
+
+  for (const el of document.querySelectorAll(".tab, .nav-menu-item")) {
+    el.classList.toggle("is-on", el.dataset.tab === tab);
+  }
+  for (const btn of document.querySelectorAll(".tab")) {
+    btn.setAttribute("aria-selected", btn.dataset.tab === tab ? "true" : "false");
+  }
+  for (const key of TABS) {
+    const panel = $("panel-" + key);
+    if (panel) panel.hidden = key !== tab;
+  }
+  closeNavMenu();
+
+  // 隐藏容器中初始化的图表尺寸为 0，进入该页时按缓存数据重绘并重新测量
+  redrawTabCharts(tab);
+  // 简报预览惰性加载：只有真正进入该页（或批次变化）才请求简报全文
+  if (tab === "report") loadReportFrame();
+
+  if (!o.silent) {
+    const want = `#${tab}`;
+    if (window.location.hash !== want) window.history.pushState(null, "", want);
+  }
+  if (!o.keepScroll) window.scrollTo({ top: 0, behavior: "auto" });
+}
+
+/** 目标页图表重绘（全部使用已缓存数据，零接口请求） */
+function redrawTabCharts(tab) {
+  if (tab === "market") {
+    drawIndustryChart();
+  } else if (tab === "backtest") {
+    drawBacktestChart();
+    drawIndustryBtChart();
+  }
+  // 等面板完成布局后再统一测量一次，确保首次进入即为正确尺寸
+  window.requestAnimationFrame(() => resizeCharts());
+}
+
+function initTabs() {
+  for (const el of document.querySelectorAll(".tab, .nav-menu-item")) {
+    el.addEventListener("click", () => switchTab(el.dataset.tab));
+  }
+  $("btnNavMenu").addEventListener("click", toggleNavMenu);
+  // 点击菜单外部自动收起
+  document.addEventListener("click", (e) => {
+    if ($("navMenu").hidden) return;
+    if (e.target.closest("#navMenu") || e.target.closest("#btnNavMenu")) return;
+    closeNavMenu();
+  });
+  window.addEventListener("popstate", () => {
+    switchTab(currentTabFromHash(), { silent: true, keepScroll: true });
+  });
+  // 首屏：按 hash 落位（无 hash 即默认候选池页），不在历史里留多余记录
+  switchTab(currentTabFromHash(), { silent: true, keepScroll: true });
+}
+
+function toggleNavMenu() {
+  const menu = $("navMenu");
+  const open = menu.hidden;
+  menu.hidden = !open;
+  $("btnNavMenu").setAttribute("aria-expanded", open ? "true" : "false");
+}
+
+function closeNavMenu() {
+  const menu = $("navMenu");
+  if (menu && !menu.hidden) menu.hidden = true;
+  const btn = $("btnNavMenu");
+  if (btn) btn.setAttribute("aria-expanded", "false");
+}
+
 /* 语言切换按钮的选中态 */
 function syncLangUI() {
   const cur = I18N.getLang();
@@ -197,6 +309,11 @@ function rerenderAll() {
   renderReportMeta();
   if (!state.polling) $("scanLog").textContent = t("scanLogIdle");
   if (state.detailPayload && $("drawer").classList.contains("show")) renderDrawerAll();
+  // 英文文案会改变轴标签宽度，切语言后按当前页重新测量一次
+  window.requestAnimationFrame(() => resizeCharts());
+  if (!$("repFrameMsg").hidden && !$("repFrame").src) {
+    $("repFrameMsg").textContent = t("repFrameLoading");
+  }
   syncStickyOffset();
 }
 
@@ -947,7 +1064,7 @@ function renderDetailHeader(profile, score, detail) {
       <div class="item-list">
         ${g.items.map((it) => `
           <div class="item ${it.hit ? "hit" : ""}">
-            <span class="dot">${it.hit ? "✓" : ""}</span>
+            <span class="dot">${it.hit ? ICON.check(11) : ""}</span>
             <span class="name">${esc(it.name)}</span>
             <span class="pts">${it.hit ? `+${it.pts}` : "0"}</span>
           </div>`).join("")}
@@ -1059,11 +1176,18 @@ function closeDrawer() {
   $("drawer").setAttribute("aria-hidden", "true");
 }
 
+/* 图表重新测量。
+   注意：隐藏标签页内的容器尺寸为 0，对隐藏图表调用 resize() 会把画布压成 0，
+   反而破坏已经渲染好的结果——因此只重测当前真正可见的图表。
+   容器挂载在隐藏面板（display:none）或是抽屉未展开时，clientWidth/Height 为 0。 */
 function resizeCharts() {
-  state.chart && state.chart.resize();
-  state.detailChart && state.detailChart.resize();
-  state.btChart && state.btChart.resize();
-  state.indChart && state.indChart.resize();
+  for (const key of ["chart", "detailChart", "btChart", "indChart"]) {
+    const inst = state[key];
+    if (!inst || typeof inst.resize !== "function") continue;
+    const dom = typeof inst.getDom === "function" ? inst.getDom() : null;
+    if (!dom || !dom.clientWidth || !dom.clientHeight) continue;
+    inst.resize();
+  }
 }
 
 /* =========================================================================
@@ -1629,7 +1753,7 @@ function renderRobustness() {
                             : `<span class="tag-bad">${esc(t("robInconsistent"))}</span>`)
             : `<span class="tag-mute">${esc(t("robNotEnough"))}</span>`}</td>`,
         `<td class="num">${(r.n_high || 0) + (r.n_low || 0) < (rob.min_samples || 0)
-            ? "—" : `<span class="tag-ok">✓</span>`}</td>`,
+            ? "—" : `<span class="tag-ok">${ICON.check(11)}</span>`}</td>`,
       ];
       rows.push(`<tr>${cells.join("")}</tr>`);
     });
@@ -1767,6 +1891,32 @@ function renderReportMeta() {
   const el = $("repMeta");
   const ts = state.repMeta || new Date().toLocaleString();
   el.textContent = `${t("repMeta")}：${ts}　|　${t("repFootNote")}`;
+}
+
+/* 报告在线预览（v1.8.0）：把简报全文内嵌到「研究简报」页。
+   - 惰性加载：只有真正进入该页才请求简报全文，不拖慢首屏；
+   - 批次联动：扫描批次变化后自动重载，避免看到旧批次的简报；
+   - 简报由服务端生成为中文版式，语言切换不改变其内容。 */
+function loadReportFrame(force) {
+  const frame = $("repFrame");
+  const msg = $("repFrameMsg");
+  if (!frame) return;
+  // 批次快照用字符串表示：null（尚未取到批次）与真实批次都能区分开
+  const key = state.runId == null ? "" : String(state.runId);
+  if (!force && state.repFrameLoaded && state.repFrameKey === key) return;
+  state.repFrameLoaded = true;
+  state.repFrameKey = key;
+
+  msg.hidden = false;
+  msg.textContent = t("repFrameLoading");
+  const base = state.runId
+    ? `/api/report/html?scan_run_id=${state.runId}`
+    : "/api/report/html";
+  const sep = base.indexOf("?") >= 0 ? "&" : "?";
+  frame.onload = () => { msg.hidden = true; };
+  frame.onerror = () => { msg.textContent = t("repFrameFail"); };
+  // 时间戳绕开浏览器对内嵌文档的缓存
+  frame.src = `${base}${sep}_t=${Date.now()}`;
 }
 
 function bindBacktestAndReport() {

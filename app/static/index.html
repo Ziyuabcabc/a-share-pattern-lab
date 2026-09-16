@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A 股历史形态匹配研究看板 · 本地运行版</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css?v=1.7.0">
+<link rel="stylesheet" href="/static/app.css?v=1.8.0">
 </head>
 <body>
 
@@ -30,6 +30,41 @@
       </div>
     </div>
   </div>
+
+  <!-- 主导航：前端无刷新切换，默认进入候选池页；窄屏折叠为汉堡菜单 -->
+  <nav class="tabbar" id="tabbar">
+    <div class="shell tabbar-inner">
+      <div class="tab-list" role="tablist" data-i18n-aria="tabNavAria" aria-label="主导航">
+        <button class="tab is-on" type="button" role="tab" data-tab="pool"
+                id="tabBtn-pool" aria-controls="panel-pool" aria-selected="true" data-i18n="tabPool">候选池选股</button>
+        <button class="tab" type="button" role="tab" data-tab="backtest"
+                id="tabBtn-backtest" aria-controls="panel-backtest" aria-selected="false" data-i18n="tabBacktest">策略回测</button>
+        <button class="tab" type="button" role="tab" data-tab="report"
+                id="tabBtn-report" aria-controls="panel-report" aria-selected="false" data-i18n="tabReport">研究简报</button>
+        <button class="tab" type="button" role="tab" data-tab="market"
+                id="tabBtn-market" aria-controls="panel-market" aria-selected="false" data-i18n="tabMarket">市场概览</button>
+        <button class="tab" type="button" role="tab" data-tab="settings"
+                id="tabBtn-settings" aria-controls="panel-settings" aria-selected="false" data-i18n="tabSettings">规则设置</button>
+      </div>
+      <!-- 窄屏汉堡按钮（图标为内联 SVG 描边图标，不使用 emoji） -->
+      <button class="nav-burger" type="button" id="btnNavMenu"
+              aria-expanded="false" aria-controls="navMenu" data-i18n-aria="tabMenuBtn" aria-label="展开导航">
+        <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor"
+             stroke-width="1.6" stroke-linecap="round" aria-hidden="true" focusable="false">
+          <path d="M3 5.5h14M3 10h14M3 14.5h14"/>
+        </svg>
+      </button>
+    </div>
+    <!-- 窄屏下拉菜单：与标签栏同源，点击后自动收起 -->
+    <div class="nav-menu" id="navMenu" hidden>
+      <button class="nav-menu-item is-on" type="button" data-tab="pool" data-i18n="tabPool">候选池选股</button>
+      <button class="nav-menu-item" type="button" data-tab="backtest" data-i18n="tabBacktest">策略回测</button>
+      <button class="nav-menu-item" type="button" data-tab="report" data-i18n="tabReport">研究简报</button>
+      <button class="nav-menu-item" type="button" data-tab="market" data-i18n="tabMarket">市场概览</button>
+      <button class="nav-menu-item" type="button" data-tab="settings" data-i18n="tabSettings">规则设置</button>
+    </div>
+  </nav>
+
   <!-- 通栏免责声明 -->
   <div class="disclaimer-bar" role="note" data-i18n="disclaimer">
     本工具仅为学术研究用途，不构成任何投资建议，股市有风险，投资需谨慎
@@ -38,7 +73,7 @@
 
 <main class="page">
 
-  <!-- ===================== 扫描面板（默认收起） ===================== -->
+  <!-- ===================== 扫描面板（全局，默认收起） ===================== -->
   <section class="card scan-panel" id="scanPanel" hidden>
     <div class="scan-panel-head">
       <div>
@@ -67,341 +102,434 @@
     <pre class="scan-log" id="scanLog">等待启动…</pre>
   </section>
 
-  <!-- ===================== 宏观参考面板 ===================== -->
-  <section class="card">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="macroTitle">宏观参考面板</h2>
-        <p class="card-sub" data-i18n="macroSub">第一行：国内主要指数（点位 + 涨跌幅）；第二行：海外隔夜与港股参考</p>
-      </div>
-      <span class="hint" id="macroUpdated"></span>
-    </div>
-    <div class="card-body">
-      <div class="macro-row" id="macroDomestic"></div>
-      <div class="macro-row macro-row-overseas" id="macroOverseas"></div>
-      <p class="macro-note" data-i18n="macroNote">仅为市场数据参考，不构成投资建议</p>
-    </div>
-  </section>
+  <!-- =====================================================================
+       标签页 1：候选池选股（默认页）
+       ===================================================================== -->
+  <div class="tab-panel" id="panel-pool" role="tabpanel" aria-labelledby="tabBtn-pool" tabindex="0">
 
-  <!-- ===================== 统计概览 ===================== -->
-  <section class="stat-strip" id="statStrip"></section>
+    <!-- 统计概览 -->
+    <section class="stat-strip" id="statStrip"></section>
 
-  <!-- ===================== 候选池 ===================== -->
-  <section class="card">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="poolTitle">候选池</h2>
-        <p class="card-sub" id="poolSub" data-i18n="poolSub">计分口径 v1.1：核心形态 0–50 + 筹码基本面 0–20 + 行业板块 0–30</p>
-      </div>
-      <div class="filters">
-        <select id="fBoard">
-          <option value="" data-i18n="filterAllBoards">全部板块</option>
-        </select>
-        <select id="fIndustry">
-          <option value="" data-i18n="filterAllIndustries">全部行业</option>
-        </select>
-        <select id="fMinScore">
-          <option value="" data-i18n="filterAllScores">全部匹配分</option>
-          <option value="60" data-i18n="filterScore60">≥ 60（高匹配分）</option>
-          <option value="40" data-i18n="filterScore40">≥ 40</option>
-          <option value="30" data-i18n="filterScore30">≥ 30（中匹配分）</option>
-        </select>
-        <select id="fOrder">
-          <option value="desc" data-i18n="orderDesc">匹配分从高到低</option>
-          <option value="asc" data-i18n="orderAsc">匹配分从低到高</option>
-        </select>
-        <input type="search" id="fSearch" data-i18n-ph="searchPlaceholder" placeholder="搜索代码 / 名称">
-      </div>
-    </div>
-    <div class="table-wrap">
-      <table id="poolTable">
-        <colgroup>
-          <col style="width:5.5%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:6.5%">
-          <col style="width:9%"><col style="width:25%">
-          <col style="width:5.5%"><col style="width:5.5%"><col style="width:8%"><col style="width:5.5%">
-          <col style="width:5%"><col style="width:6.5%"><col style="width:6%">
-        </colgroup>
-        <thead>
-          <tr>
-            <th data-i18n="thCode">代码</th>
-            <th data-i18n="thName">名称</th>
-            <th data-i18n="thBoard">板块</th>
-            <th data-i18n="thIndustry">行业</th>
-            <th class="num" data-i18n="thScore">综合匹配分</th>
-            <th data-i18n="thHits">指标命中项</th>
-            <th class="num" data-i18n="thClose">收盘价</th>
-            <th class="num" data-i18n="thTurnover">换手率</th>
-            <th class="num" data-i18n="thReturn5">近5日涨幅</th>
-            <th class="num" data-i18n="thPe">PE(TTM)</th>
-            <th class="num" data-i18n="thKdj">KDJ-J</th>
-            <th class="num" data-i18n="thChip">筹码集中度</th>
-            <th><span data-i18n="thShrink">红柱前高收缩</span><a class="fn" data-i18n-title="thShrinkNote" title="历史见顶相关指标，仅供研究，不参与打分">*</a></th>
-          </tr>
-        </thead>
-        <tbody id="poolBody"></tbody>
-      </table>
-      <div class="empty" id="poolEmpty" data-i18n="poolEmptyScan">暂无数据 —— 请先执行全市场扫描</div>
-    </div>
-    <div class="card-foot">
-      <span id="poolCount">—</span>
-      <button class="btn btn-ghost" id="btnMore" data-i18n="btnMore" hidden>加载更多</button>
-    </div>
-  </section>
-
-  <!-- ===================== 行业分布 ===================== -->
-  <section class="card">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="indTitle">候选池行业分布</h2>
-        <p class="card-sub" data-i18n="indSub">行业分类口径：申万一级行业（31 个）；命中热点名单的行业以暖色区分</p>
-      </div>
-      <span class="hint" id="indCoverage"></span>
-    </div>
-    <div class="chart-box" id="industryChart"></div>
-  </section>
-
-  <!-- ===================== 策略回测 ===================== -->
-  <section class="card" id="btCard">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="btTitle">策略回测</h2>
-        <p class="card-sub" id="btSub" data-i18n="btSub">按形态匹配分分档，统计历史持仓 5 / 10 / 20 个交易日的绩效表现；回测用未来信息已严格规避</p>
-      </div>
-      <div class="filters">
-        <div class="seg" id="btMode" role="group" data-i18n-aria="btModeAria" aria-label="对比口径">
-          <button type="button" class="seg-opt is-on" data-mode="tier" data-i18n="btModeTier">分档绩效</button>
-          <button type="button" class="seg-opt" data-mode="resonance" data-i18n="btModeResonance">共振对比</button>
+    <!-- 候选池 -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="poolTitle">候选池</h2>
+          <p class="card-sub" id="poolSub" data-i18n="poolSub">计分口径 v1.1：核心形态 0–50 + 筹码基本面 0–20 + 行业板块 0–30</p>
         </div>
-        <div class="seg" id="btHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
-          <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
-          <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
-          <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+        <div class="filters">
+          <select id="fBoard">
+            <option value="" data-i18n="filterAllBoards">全部板块</option>
+          </select>
+          <select id="fIndustry">
+            <option value="" data-i18n="filterAllIndustries">全部行业</option>
+          </select>
+          <select id="fMinScore">
+            <option value="" data-i18n="filterAllScores">全部匹配分</option>
+            <option value="60" data-i18n="filterScore60">≥ 60（高匹配分）</option>
+            <option value="40" data-i18n="filterScore40">≥ 40</option>
+            <option value="30" data-i18n="filterScore30">≥ 30（中匹配分）</option>
+          </select>
+          <select id="fOrder">
+            <option value="desc" data-i18n="orderDesc">匹配分从高到低</option>
+            <option value="asc" data-i18n="orderAsc">匹配分从低到高</option>
+          </select>
+          <input type="search" id="fSearch" data-i18n-ph="searchPlaceholder" placeholder="搜索代码 / 名称">
         </div>
-        <button class="btn btn-ghost" id="btnBtCsv" data-i18n="btnBtCsv">导出回测明细</button>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="bt-meta" id="btMeta"></div>
-      <div class="chart-box chart-bt" id="btChart"></div>
-      <div class="table-wrap table-bt" id="btTierWrap">
-        <table id="btTable">
+      <div class="table-wrap">
+        <table id="poolTable">
           <colgroup>
-            <col style="width:20%"><col style="width:13%"><col style="width:13%">
-            <col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:13%">
+            <col style="width:5.5%"><col style="width:6.5%"><col style="width:5.5%"><col style="width:6.5%">
+            <col style="width:9%"><col style="width:25%">
+            <col style="width:5.5%"><col style="width:5.5%"><col style="width:8%"><col style="width:5.5%">
+            <col style="width:5%"><col style="width:6.5%"><col style="width:6%">
           </colgroup>
           <thead>
             <tr>
-              <th data-i18n="btThGroup">分组</th>
-              <th class="num" data-i18n="btThSamples">样本数</th>
-              <th class="num" data-i18n="btThWin">上涨胜率</th>
-              <th class="num" data-i18n="btThAvg">平均收益率</th>
-              <th class="num" data-i18n="btThExcess">超额收益</th>
-              <th class="num" data-i18n="btThMdd">最大回撤</th>
-              <th class="num" data-i18n="btThPl">盈亏比</th>
+              <th data-i18n="thCode">代码</th>
+              <th data-i18n="thName">名称</th>
+              <th data-i18n="thBoard">板块</th>
+              <th data-i18n="thIndustry">行业</th>
+              <th class="num" data-i18n="thScore">综合匹配分</th>
+              <th data-i18n="thHits">指标命中项</th>
+              <th class="num" data-i18n="thClose">收盘价</th>
+              <th class="num" data-i18n="thTurnover">换手率</th>
+              <th class="num" data-i18n="thReturn5">近5日涨幅</th>
+              <th class="num" data-i18n="thPe">PE(TTM)</th>
+              <th class="num" data-i18n="thKdj">KDJ-J</th>
+              <th class="num" data-i18n="thChip">筹码集中度</th>
+              <th><span data-i18n="thShrink">红柱前高收缩</span><a class="fn" data-i18n-title="thShrinkNote" title="历史见顶相关指标，仅供研究，不参与打分">*</a></th>
             </tr>
           </thead>
-          <tbody id="btBody"></tbody>
+          <tbody id="poolBody"></tbody>
         </table>
+        <div class="empty" id="poolEmpty" data-i18n="poolEmptyScan">暂无数据 —— 请先执行全市场扫描</div>
       </div>
-      <!-- 共振对比：双共振分组 vs 单日线高匹配分组（v1.7.0） -->
-      <div class="table-wrap table-bt" id="btResWrap" hidden>
-        <table id="btResTable">
-          <colgroup>
-            <col style="width:18%"><col style="width:12%"><col style="width:12%">
-            <col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:14%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="rsThScope">对比口径</th>
-              <th class="num" data-i18n="btThSamples">样本数</th>
-              <th class="num" data-i18n="btThWin">上涨胜率</th>
-              <th class="num" data-i18n="btThAvg">平均收益率</th>
-              <th class="num" data-i18n="btThMdd">最大回撤</th>
-              <th class="num" data-i18n="rsThWinDiff">胜率之差</th>
-              <th class="num" data-i18n="rsThRetDiff">收益之差</th>
-            </tr>
-          </thead>
-          <tbody id="btResBody"></tbody>
-        </table>
-        <p class="bt-foot" id="btResNote"></p>
+      <div class="card-foot">
+        <span id="poolCount">—</span>
+        <button class="btn btn-ghost" id="btnMore" data-i18n="btnMore" hidden>加载更多</button>
       </div>
-      <div class="empty" id="btEmpty" hidden data-i18n="btEmpty">暂无回测结果 —— 请先构建回测数据并执行回测</div>
-      <p class="bt-method" id="btMethod"></p>
-    </div>
-  </section>
+    </section>
+  </div>
 
-  <!-- ===================== 分行业回测（v1.7.0） ===================== -->
-  <section class="card" id="indBtCard">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="indBtTitle">分行业回测</h2>
-        <p class="card-sub" id="indBtSub" data-i18n="indBtSub">按申万一级行业拆分高 / 中 / 低匹配分组的历史绩效；结果由回测明细二次聚合，与「策略回测」同源可对账</p>
-      </div>
-      <div class="filters">
-        <select id="indSel" class="filters-select"></select>
-        <div class="seg" id="indHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
-          <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
-          <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
-          <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+  <!-- =====================================================================
+       标签页 2：策略回测（分档绩效 / 分行业 / 显著性 / 敏感性 / 共振）
+       ===================================================================== -->
+  <div class="tab-panel" id="panel-backtest" role="tabpanel" aria-labelledby="tabBtn-backtest" tabindex="0" hidden>
+
+    <!-- 策略回测 -->
+    <section class="card" id="btCard">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="btTitle">策略回测</h2>
+          <p class="card-sub" id="btSub" data-i18n="btSub">按形态匹配分分档，统计历史持仓 5 / 10 / 20 个交易日的绩效表现；回测用未来信息已严格规避</p>
         </div>
-        <button class="btn btn-ghost" id="btnIndCsv" data-i18n="btnIndCsv">导出分行业明细</button>
+        <div class="filters">
+          <div class="seg" id="btMode" role="group" data-i18n-aria="btModeAria" aria-label="对比口径">
+            <button type="button" class="seg-opt is-on" data-mode="tier" data-i18n="btModeTier">分档绩效</button>
+            <button type="button" class="seg-opt" data-mode="resonance" data-i18n="btModeResonance">共振对比</button>
+          </div>
+          <div class="seg" id="btHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
+            <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
+            <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
+            <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+          </div>
+          <button class="btn btn-ghost" id="btnBtCsv" data-i18n="btnBtCsv">导出回测明细</button>
+        </div>
       </div>
-    </div>
-    <div class="card-body">
-      <div class="bt-meta" id="indBtMeta"></div>
-      <div class="chart-box" id="indBtChart"></div>
-      <div class="table-wrap table-bt">
-        <table id="indBtTable">
-          <colgroup>
-            <col style="width:22%"><col style="width:12%"><col style="width:13%">
-            <col style="width:15%"><col style="width:15%"><col style="width:23%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="btThGroup">分组</th>
-              <th class="num" data-i18n="btThSamples">样本数</th>
-              <th class="num" data-i18n="btThWin">上涨胜率</th>
-              <th class="num" data-i18n="btThAvg">平均收益率</th>
-              <th class="num" data-i18n="btThMdd">最大回撤</th>
-              <th class="num" data-i18n="indThBar">相对展示</th>
-            </tr>
-          </thead>
-          <tbody id="indBtBody"></tbody>
-        </table>
-        <div class="empty" id="indBtEmpty" hidden data-i18n="indBtEmpty">暂无分行业回测结果 —— 请先运行 v1.7 分析构建</div>
+      <div class="card-body">
+        <div class="bt-meta" id="btMeta"></div>
+        <div class="chart-box chart-bt" id="btChart"></div>
+        <div class="table-wrap table-bt" id="btTierWrap">
+          <table id="btTable">
+            <colgroup>
+              <col style="width:20%"><col style="width:13%"><col style="width:13%">
+              <col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:13%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="btThGroup">分组</th>
+                <th class="num" data-i18n="btThSamples">样本数</th>
+                <th class="num" data-i18n="btThWin">上涨胜率</th>
+                <th class="num" data-i18n="btThAvg">平均收益率</th>
+                <th class="num" data-i18n="btThExcess">超额收益</th>
+                <th class="num" data-i18n="btThMdd">最大回撤</th>
+                <th class="num" data-i18n="btThPl">盈亏比</th>
+              </tr>
+            </thead>
+            <tbody id="btBody"></tbody>
+          </table>
+        </div>
+        <!-- 共振对比：双共振分组 vs 单日线高匹配分组（v1.7.0） -->
+        <div class="table-wrap table-bt" id="btResWrap" hidden>
+          <table id="btResTable">
+            <colgroup>
+              <col style="width:18%"><col style="width:12%"><col style="width:12%">
+              <col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:14%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="rsThScope">对比口径</th>
+                <th class="num" data-i18n="btThSamples">样本数</th>
+                <th class="num" data-i18n="btThWin">上涨胜率</th>
+                <th class="num" data-i18n="btThAvg">平均收益率</th>
+                <th class="num" data-i18n="btThMdd">最大回撤</th>
+                <th class="num" data-i18n="rsThWinDiff">胜率之差</th>
+                <th class="num" data-i18n="rsThRetDiff">收益之差</th>
+              </tr>
+            </thead>
+            <tbody id="btResBody"></tbody>
+          </table>
+          <p class="bt-foot" id="btResNote"></p>
+        </div>
+        <div class="empty" id="btEmpty" hidden data-i18n="btEmpty">暂无回测结果 —— 请先构建回测数据并执行回测</div>
+        <p class="bt-method" id="btMethod"></p>
       </div>
-      <div class="rank-pair" id="indRankPair"></div>
-      <p class="bt-foot" id="indBtFoot"></p>
-    </div>
-  </section>
+    </section>
 
-  <!-- ===================== 稳健性与敏感性（v1.7.0） ===================== -->
-  <section class="card" id="robCard">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="robTitle">统计检验与参数稳健性</h2>
-        <p class="card-sub" id="robSub" data-i18n="robSub">高 / 低匹配分组的 Welch t 检验、分年度稳健性拆解，以及 3 组核心参数的敏感性对照</p>
+    <!-- 分行业回测（v1.7.0） -->
+    <section class="card" id="indBtCard">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="indBtTitle">分行业回测</h2>
+          <p class="card-sub" id="indBtSub" data-i18n="indBtSub">按申万一级行业拆分高 / 中 / 低匹配分组的历史绩效；结果由回测明细二次聚合，与「策略回测」同源可对账</p>
+        </div>
+        <div class="filters">
+          <select id="indSel" class="filters-select"></select>
+          <div class="seg" id="indHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
+            <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
+            <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
+            <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+          </div>
+          <button class="btn btn-ghost" id="btnIndCsv" data-i18n="btnIndCsv">导出分行业明细</button>
+        </div>
       </div>
-      <span class="hint" id="robMeta"></span>
-    </div>
-    <div class="card-body">
-      <h3 class="sub-h3" data-i18n="robSecSig">一、分组差异的统计显著性（Welch t 检验）</h3>
-      <div class="table-wrap table-bt">
-        <table id="sigTable">
-          <colgroup>
-            <col style="width:11%"><col style="width:13%"><col style="width:13%">
-            <col style="width:13%"><col style="width:12%"><col style="width:11%"><col style="width:17%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="btThHorizon">持仓周期</th>
-              <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
-              <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
-              <th class="num" data-i18n="sigThDiff">均值差异</th>
-              <th class="num" data-i18n="sigThT">t 值</th>
-              <th class="num" data-i18n="sigThP">p 值</th>
-              <th class="num" data-i18n="sigThCi">95% 置信区间（差异）</th>
-            </tr>
-          </thead>
-          <tbody id="sigBody"></tbody>
-        </table>
-        <div class="empty" id="sigEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+      <div class="card-body">
+        <div class="bt-meta" id="indBtMeta"></div>
+        <div class="chart-box" id="indBtChart"></div>
+        <div class="table-wrap table-bt">
+          <table id="indBtTable">
+            <colgroup>
+              <col style="width:22%"><col style="width:12%"><col style="width:13%">
+              <col style="width:15%"><col style="width:15%"><col style="width:23%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="btThGroup">分组</th>
+                <th class="num" data-i18n="btThSamples">样本数</th>
+                <th class="num" data-i18n="btThWin">上涨胜率</th>
+                <th class="num" data-i18n="btThAvg">平均收益率</th>
+                <th class="num" data-i18n="btThMdd">最大回撤</th>
+                <th class="num" data-i18n="indThBar">相对展示</th>
+              </tr>
+            </thead>
+            <tbody id="indBtBody"></tbody>
+          </table>
+          <div class="empty" id="indBtEmpty" hidden data-i18n="indBtEmpty">暂无分行业回测结果 —— 请先运行 v1.7 分析构建</div>
+        </div>
+        <div class="rank-pair" id="indRankPair"></div>
+        <p class="bt-foot" id="indBtFoot"></p>
       </div>
-      <p class="bt-foot" id="sigFoot"></p>
+    </section>
 
-      <h3 class="sub-h3" data-i18n="robSecYear">二、分年度稳健性检验</h3>
-      <div class="table-wrap table-bt">
-        <table id="robTable">
-          <colgroup>
-            <col style="width:10%"><col style="width:10%"><col style="width:11%">
-            <col style="width:12%"><col style="width:12%"><col style="width:12%">
-            <col style="width:12%"><col style="width:13%"><col style="width:8%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="robThYear">年度</th>
-              <th class="num" data-i18n="btThHorizon">持仓周期</th>
-              <th class="num" data-i18n="robThNh">高分组样本</th>
-              <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
-              <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
-              <th class="num" data-i18n="sigThDiff">均值差异</th>
-              <th class="num" data-i18n="robThWdiff">胜率之差</th>
-              <th class="num" data-i18n="robThDir">方向是否一致</th>
-              <th class="num" data-i18n="robThEnough">样本充足</th>
-            </tr>
-          </thead>
-          <tbody id="robBody"></tbody>
-        </table>
-        <div class="empty" id="robEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+    <!-- 稳健性与敏感性（v1.7.0） -->
+    <section class="card" id="robCard">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="robTitle">统计检验与参数稳健性</h2>
+          <p class="card-sub" id="robSub" data-i18n="robSub">高 / 低匹配分组的 Welch t 检验、分年度稳健性拆解，以及 3 组核心参数的敏感性对照</p>
+        </div>
+        <span class="hint" id="robMeta"></span>
       </div>
-      <p class="bt-foot" id="robFoot"></p>
+      <div class="card-body">
+        <h3 class="sub-h3" data-i18n="robSecSig">一、分组差异的统计显著性（Welch t 检验）</h3>
+        <div class="table-wrap table-bt">
+          <table id="sigTable">
+            <colgroup>
+              <col style="width:11%"><col style="width:13%"><col style="width:13%">
+              <col style="width:13%"><col style="width:12%"><col style="width:11%"><col style="width:17%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="btThHorizon">持仓周期</th>
+                <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
+                <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
+                <th class="num" data-i18n="sigThDiff">均值差异</th>
+                <th class="num" data-i18n="sigThT">t 值</th>
+                <th class="num" data-i18n="sigThP">p 值</th>
+                <th class="num" data-i18n="sigThCi">95% 置信区间（差异）</th>
+              </tr>
+            </thead>
+            <tbody id="sigBody"></tbody>
+          </table>
+          <div class="empty" id="sigEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+        </div>
+        <p class="bt-foot" id="sigFoot"></p>
 
-      <h3 class="sub-h3" data-i18n="robSecSens">三、参数敏感性分析</h3>
-      <div class="table-wrap table-bt">
-        <table id="sensTable">
-          <colgroup>
-            <col style="width:15%"><col style="width:13%"><col style="width:11%">
-            <col style="width:15%"><col style="width:12%"><col style="width:17%"><col style="width:17%">
-          </colgroup>
-          <thead>
-            <tr>
-              <th data-i18n="sensThParam">考察参数</th>
-              <th data-i18n="sensThValue">参数取值</th>
-              <th class="num" data-i18n="sensThWin">胜率</th>
-              <th class="num" data-i18n="sensThRet">高匹配分组收益</th>
-              <th class="num" data-i18n="sensThDelta">相对基准变动</th>
-              <th class="num" data-i18n="sensThDir">分组方向</th>
-              <th class="num" data-i18n="sensThStable">幅度稳定性</th>
-            </tr>
-          </thead>
-          <tbody id="sensBody"></tbody>
-        </table>
-        <div class="empty" id="sensEmpty" hidden data-i18n="sensEmpty">暂无敏感性分析结果</div>
-      </div>
-      <p class="bt-foot" id="sensFoot"></p>
-    </div>
-  </section>
+        <h3 class="sub-h3" data-i18n="robSecYear">二、分年度稳健性检验</h3>
+        <div class="table-wrap table-bt">
+          <table id="robTable">
+            <colgroup>
+              <col style="width:10%"><col style="width:10%"><col style="width:11%">
+              <col style="width:12%"><col style="width:12%"><col style="width:12%">
+              <col style="width:12%"><col style="width:13%"><col style="width:8%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="robThYear">年度</th>
+                <th class="num" data-i18n="btThHorizon">持仓周期</th>
+                <th class="num" data-i18n="robThNh">高分组样本</th>
+                <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
+                <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
+                <th class="num" data-i18n="sigThDiff">均值差异</th>
+                <th class="num" data-i18n="robThWdiff">胜率之差</th>
+                <th class="num" data-i18n="robThDir">方向是否一致</th>
+                <th class="num" data-i18n="robThEnough">样本充足</th>
+              </tr>
+            </thead>
+            <tbody id="robBody"></tbody>
+          </table>
+          <div class="empty" id="robEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+        </div>
+        <p class="bt-foot" id="robFoot"></p>
 
-  <!-- ===================== 研究简报 ===================== -->
-  <section class="card" id="repCard">
-    <div class="card-head">
-      <div class="card-title">
-        <h2 data-i18n="repTitle">研究简报</h2>
-        <p class="card-sub" data-i18n="repSub">按标准学术结构自动生成，数据与看板实时同步，同一批次可完整复现</p>
+        <h3 class="sub-h3" data-i18n="robSecSens">三、参数敏感性分析</h3>
+        <div class="table-wrap table-bt">
+          <table id="sensTable">
+            <colgroup>
+              <col style="width:15%"><col style="width:13%"><col style="width:11%">
+              <col style="width:15%"><col style="width:12%"><col style="width:17%"><col style="width:17%">
+            </colgroup>
+            <thead>
+              <tr>
+                <th data-i18n="sensThParam">考察参数</th>
+                <th data-i18n="sensThValue">参数取值</th>
+                <th class="num" data-i18n="sensThWin">胜率</th>
+                <th class="num" data-i18n="sensThRet">高匹配分组收益</th>
+                <th class="num" data-i18n="sensThDelta">相对基准变动</th>
+                <th class="num" data-i18n="sensThDir">分组方向</th>
+                <th class="num" data-i18n="sensThStable">幅度稳定性</th>
+              </tr>
+            </thead>
+            <tbody id="sensBody"></tbody>
+          </table>
+          <div class="empty" id="sensEmpty" hidden data-i18n="sensEmpty">暂无敏感性分析结果</div>
+        </div>
+        <p class="bt-foot" id="sensFoot"></p>
       </div>
-      <div class="filters">
-        <button class="btn btn-ghost" id="btnRepPreview" data-i18n="btnRepPreview">预览简报</button>
-        <button class="btn btn-primary" id="btnRepPdf" data-i18n="btnRepPdf">导出 PDF</button>
-      </div>
-    </div>
-    <div class="card-body">
-      <ul class="rep-outline" id="repOutline"></ul>
-      <p class="hint" id="repMeta"></p>
-    </div>
-  </section>
+    </section>
+  </div>
 
-  <!-- ===================== 市场资讯 ===================== -->
-  <section class="card" id="newsCard">
-    <div class="card-head">
-      <div class="card-title">
-        <h2><span data-i18n="newsTitle">市场资讯</span><span class="news-lang-badge" id="newsLangBadge" hidden>News in Chinese</span></h2>
-        <p class="card-sub" id="newsNote" data-i18n="newsNote">公开财经快讯自动采集并按关键词归类，仅作研究参考</p>
+  <!-- =====================================================================
+       标签页 3：研究简报（目录 + 在线预览 + PDF 导出）
+       ===================================================================== -->
+  <div class="tab-panel" id="panel-report" role="tabpanel" aria-labelledby="tabBtn-report" tabindex="0" hidden>
+
+    <section class="card" id="repCard">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="repTitle">研究简报</h2>
+          <p class="card-sub" data-i18n="repSub">按标准学术结构自动生成，数据与看板实时同步，同一批次可完整复现</p>
+        </div>
+        <div class="filters">
+          <button class="btn btn-ghost" id="btnRepPreview" data-i18n="btnRepPreview">新窗口打开</button>
+          <button class="btn btn-primary" id="btnRepPdf" data-i18n="btnRepPdf">导出 PDF</button>
+        </div>
       </div>
-      <div class="news-tabs" id="newsTabs">
-        <button class="news-tab is-on" data-cat="all" data-i18n="newsTabAll">全部</button>
-        <button class="news-tab" data-cat="domestic" data-i18n="newsCatDomestic">国内资讯</button>
-        <button class="news-tab" data-cat="overseas" data-i18n="newsCatOverseas">海外资讯</button>
-        <button class="news-tab" data-cat="macro" data-i18n="newsCatMacro">宏观资讯</button>
+      <div class="card-body">
+        <ul class="rep-outline" id="repOutline"></ul>
+        <p class="hint" id="repMeta"></p>
       </div>
-    </div>
-    <div class="news-list" id="newsList">
-      <div class="news-empty" data-i18n="newsLoading">资讯加载中…</div>
-    </div>
-    <div class="card-foot">
-      <span id="newsMeta">—</span>
-      <span class="hint" data-i18n="newsFootNote">资讯为第三方公开内容摘要，不代表本工具观点</span>
-    </div>
-  </section>
+    </section>
+
+    <!-- 报告在线预览：内嵌简报全文（自包含 HTML），首次进入本页时惰性加载 -->
+    <section class="card rep-frame-card">
+      <div class="card-head">
+        <div class="card-title">
+          <h3 data-i18n="repFrameTitle">报告在线预览</h3>
+          <p class="card-sub" data-i18n="repFrameHint">内嵌简报全文，可直接滚动阅读；导出 PDF 为正式排版版本</p>
+        </div>
+        <div class="filters">
+          <button class="btn btn-ghost" id="btnRepInline" data-i18n="btnRepInline">刷新预览</button>
+        </div>
+      </div>
+      <div class="rep-frame-wrap">
+        <iframe class="rep-frame" id="repFrame" title="研究简报预览"></iframe>
+        <div class="rep-frame-msg" id="repFrameMsg" data-i18n="repFrameLoading">简报加载中…</div>
+      </div>
+    </section>
+  </div>
+
+  <!-- =====================================================================
+       标签页 4：市场概览（宏观指数 / 行业分布 / 市场资讯）
+       ===================================================================== -->
+  <div class="tab-panel" id="panel-market" role="tabpanel" aria-labelledby="tabBtn-market" tabindex="0" hidden>
+
+    <!-- 宏观参考面板 -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="macroTitle">宏观参考面板</h2>
+          <p class="card-sub" data-i18n="macroSub">第一行：国内主要指数（点位 + 涨跌幅）；第二行：海外隔夜与港股参考</p>
+        </div>
+        <span class="hint" id="macroUpdated"></span>
+      </div>
+      <div class="card-body">
+        <div class="macro-row" id="macroDomestic"></div>
+        <div class="macro-row macro-row-overseas" id="macroOverseas"></div>
+        <p class="macro-note" data-i18n="macroNote">仅为市场数据参考，不构成投资建议</p>
+      </div>
+    </section>
+
+    <!-- 行业分布 -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="indTitle">候选池行业分布</h2>
+          <p class="card-sub" data-i18n="indSub">行业分类口径：申万一级行业（31 个）；命中热点名单的行业以暖色区分</p>
+        </div>
+        <span class="hint" id="indCoverage"></span>
+      </div>
+      <div class="chart-box" id="industryChart"></div>
+    </section>
+
+    <!-- 市场资讯 -->
+    <section class="card" id="newsCard">
+      <div class="card-head">
+        <div class="card-title">
+          <h2><span data-i18n="newsTitle">市场资讯</span><span class="news-lang-badge" id="newsLangBadge" hidden>News in Chinese</span></h2>
+          <p class="card-sub" id="newsNote" data-i18n="newsNote">公开财经快讯自动采集并按关键词归类，仅作研究参考</p>
+        </div>
+        <div class="news-tabs" id="newsTabs">
+          <button class="news-tab is-on" data-cat="all" data-i18n="newsTabAll">全部</button>
+          <button class="news-tab" data-cat="domestic" data-i18n="newsCatDomestic">国内资讯</button>
+          <button class="news-tab" data-cat="overseas" data-i18n="newsCatOverseas">海外资讯</button>
+          <button class="news-tab" data-cat="macro" data-i18n="newsCatMacro">宏观资讯</button>
+        </div>
+      </div>
+      <div class="news-list" id="newsList">
+        <div class="news-empty" data-i18n="newsLoading">资讯加载中…</div>
+      </div>
+      <div class="card-foot">
+        <span id="newsMeta">—</span>
+        <span class="hint" data-i18n="newsFootNote">资讯为第三方公开内容摘要，不代表本工具观点</span>
+      </div>
+    </section>
+  </div>
+
+  <!-- =====================================================================
+       标签页 5：规则设置（占位，预留后续权重配置类功能）
+       ===================================================================== -->
+  <div class="tab-panel" id="panel-settings" role="tabpanel" aria-labelledby="tabBtn-settings" tabindex="0" hidden>
+
+    <section class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="setTitle">规则设置</h2>
+          <p class="card-sub" data-i18n="setSub">打分规则与参数的配置入口；本版本仅梳理现行口径，界面化配置待后续版本开放</p>
+        </div>
+        <span class="pill pill-muted" data-i18n="setBadge">待开放</span>
+      </div>
+      <div class="card-body">
+        <p class="set-note" data-i18n="setNote">下面列出的是当前生效的口径与维护位置。改动打分规则会影响历史可比性，因此需重新执行扫描（或对已缓存数据做离线重算）后才会生效。</p>
+        <div class="set-grid" id="setGrid">
+          <article class="set-item">
+            <div class="set-item-head">
+              <h3 data-i18n="setWeightT">指标权重配置</h3>
+              <span class="tag" data-i18n="setTagPlanned">规划中</span>
+            </div>
+            <p class="set-desc" data-i18n="setWeightD">调整三大模块与各细分项的得分权重，用于比较不同口径下的匹配结果差异。</p>
+            <p class="set-now"><span class="set-now-label" data-i18n="setNowLabel">现行口径</span><span data-i18n="setWeightNow">核心形态 0–50 ＋ 筹码基本面 0–20 ＋ 行业板块 0–30</span></p>
+          </article>
+          <article class="set-item">
+            <div class="set-item-head">
+              <h3 data-i18n="setThreshT">分组阈值</h3>
+              <span class="tag" data-i18n="setTagPlanned">规划中</span>
+            </div>
+            <p class="set-desc" data-i18n="setThreshD">设定高 / 中 / 低匹配分组的分界分数，改变分组规模与统计口径。</p>
+            <p class="set-now"><span class="set-now-label" data-i18n="setNowLabel">现行口径</span><span data-i18n="setThreshNow">高 ≥ 60 ／ 中 30–59 ／ 低 &lt; 30（回测沿用同一标准）</span></p>
+          </article>
+          <article class="set-item">
+            <div class="set-item-head">
+              <h3 data-i18n="setHotT">热点行业名单</h3>
+              <span class="tag" data-i18n="setTagPlanned">规划中</span>
+            </div>
+            <p class="set-desc" data-i18n="setHotD">维护行业板块模块命中的热点行业，口径为申万一级行业名称。</p>
+            <p class="set-now"><span class="set-now-label" data-i18n="setNowLabel">现行口径</span><span data-i18n="setHotNow">本机 config/hot_industries.json 维护，后续提供界面编辑</span></p>
+          </article>
+          <article class="set-item">
+            <div class="set-item-head">
+              <h3 data-i18n="setFilterT">基础过滤条件</h3>
+              <span class="tag" data-i18n="setTagPlanned">规划中</span>
+            </div>
+            <p class="set-desc" data-i18n="setFilterD">调整进入候选池前的剔除规则与参数，影响参与统计的样本范围。</p>
+            <p class="set-now"><span class="set-now-label" data-i18n="setNowLabel">现行口径</span><span data-i18n="setFilterNow">剔除 ST、上市不足 365 天、停牌、北交所股票</span></p>
+          </article>
+        </div>
+      </div>
+    </section>
+  </div>
 
   <footer class="foot">
     <p data-i18n="foot1">本工具仅对 A 股历史公开数据做统计研究：输出为形态特征匹配度分数，用于表示当前个股与历史上升段启动样本的特征相似程度，
@@ -437,8 +565,8 @@
   </div>
 </aside>
 
-<script src="/static/i18n.js?v=1.7.0"></script>
-<script src="/static/vendor/echarts.min.js?v=1.7.0"></script>
-<script src="/static/app.js?v=1.7.0"></script>
+<script src="/static/i18n.js?v=1.8.0"></script>
+<script src="/static/vendor/echarts.min.js?v=1.8.0"></script>
+<script src="/static/app.js?v=1.8.0"></script>
 </body>
 </html>

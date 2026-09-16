@@ -53,7 +53,7 @@
       scanStarting: "正在启动扫描…",
       scanStartFail: "启动失败：{msg}",
       scanPreparing: "扫描准备中…",
-      scanDone: "✔ 批次 #{id} 完成：候选 {c}，高匹配分 {h}，中匹配分 {m}",
+      scanDone: "批次 #{id} 完成：候选 {c}，高匹配分 {h}，中匹配分 {m}",
 
       /* 宏观参考面板 */
       macroTitle: "宏观参考面板",
@@ -341,7 +341,7 @@
       /* 研究简报（v1.7.0：九节结构） */
       repTitle: "研究简报",
       repSub: "按标准学术结构自动生成，数据与看板实时同步，同一批次可完整复现",
-      btnRepPreview: "预览简报",
+      btnRepPreview: "新窗口打开",
       btnRepPdf: "导出 PDF",
       repExporting: "正在渲染 PDF…",
       repExportFail: "PDF 导出失败",
@@ -357,6 +357,42 @@
       repOutline7: "研究结论与展望",
       repOutline8: "研究局限性与风险提示",
       repOutline9: "合规声明",
+
+      /* 顶部导航标签页（v1.8.0：单页长滚动 → 分页签布局） */
+      tabNavAria: "主导航",
+      tabMenuBtn: "展开导航",
+      tabPool: "候选池选股",
+      tabBacktest: "策略回测",
+      tabReport: "研究简报",
+      tabMarket: "市场概览",
+      tabSettings: "规则设置",
+
+      /* 报告在线预览（v1.8.0） */
+      btnRepInline: "刷新预览",
+      repFrameTitle: "报告在线预览",
+      repFrameHint: "内嵌简报全文，可直接滚动阅读；导出 PDF 为正式排版版本",
+      repFrameLoading: "简报加载中…",
+      repFrameFail: "简报加载失败，请确认本地服务正在运行",
+
+      /* 规则设置（v1.8.0，占位页） */
+      setTitle: "规则设置",
+      setSub: "打分规则与参数的配置入口；本版本仅梳理现行口径，界面化配置待后续版本开放",
+      setBadge: "待开放",
+      setNote: "下表列出当前生效的口径及其维护位置。改动打分规则会影响历史可比性，需重新执行扫描（或对已缓存数据做离线重算）后才会生效。",
+      setNowLabel: "现行口径",
+      setTagPlanned: "规划中",
+      setWeightT: "指标权重配置",
+      setWeightD: "调整三大模块与各细分项的得分权重，用于比较不同口径下的匹配结果差异。",
+      setWeightNow: "核心形态 0–50 ＋ 筹码基本面 0–20 ＋ 行业板块 0–30",
+      setThreshT: "分组阈值",
+      setThreshD: "设定高 / 中 / 低匹配分组的分界分数，改变分组规模与统计口径。",
+      setThreshNow: "高 ≥ 60 ／ 中 30–59 ／ 低 < 30（回测沿用同一标准）",
+      setHotT: "热点行业名单",
+      setHotD: "维护行业板块模块命中的热点行业，口径为申万一级行业名称。",
+      setHotNow: "本机 config/hot_industries.json 维护，后续提供界面编辑",
+      setFilterT: "基础过滤条件",
+      setFilterD: "调整进入候选池前的剔除规则与参数，影响参与统计的样本范围。",
+      setFilterNow: "剔除 ST、上市不足 365 天、停牌、北交所股票",
     },
 
     /* ----------------------------- English ---------------------------- */
@@ -390,7 +426,7 @@
       scanStarting: "Starting scan…",
       scanStartFail: "Failed to start: {msg}",
       scanPreparing: "Preparing scan…",
-      scanDone: "✔ Batch #{id} finished: {c} candidates, {h} high match, {m} medium match",
+      scanDone: "Batch #{id} finished: {c} candidates, {h} high match, {m} medium match",
 
       /* Macro panel */
       macroTitle: "Market Reference Panel",
@@ -677,7 +713,7 @@
       /* Research note (v1.7.0: nine sections) */
       repTitle: "Research Note",
       repSub: "Generated automatically in a standard academic structure, synchronized with the dashboard and fully reproducible for a given run",
-      btnRepPreview: "Preview note",
+      btnRepPreview: "Open in new tab",
       btnRepPdf: "Export PDF",
       repExporting: "Rendering PDF…",
       repExportFail: "PDF export failed",
@@ -693,6 +729,42 @@
       repOutline7: "Conclusions and outlook",
       repOutline8: "Limitations and risks",
       repOutline9: "Compliance statement",
+
+      /* Top navigation tabs (v1.8.0: long single page → tabbed layout) */
+      tabNavAria: "Main navigation",
+      tabMenuBtn: "Open navigation",
+      tabPool: "Screening",
+      tabBacktest: "Backtesting",
+      tabReport: "Research note",
+      tabMarket: "Market overview",
+      tabSettings: "Rule settings",
+
+      /* Inline report preview (v1.8.0) */
+      btnRepInline: "Reload preview",
+      repFrameTitle: "Report preview",
+      repFrameHint: "Full note rendered inline — scroll to read. Export PDF for the typeset version. The note itself is generated in Chinese.",
+      repFrameLoading: "Loading note…",
+      repFrameFail: "Could not load the note — check that the local service is running",
+
+      /* Rule settings (v1.8.0, placeholder) */
+      setTitle: "Rule settings",
+      setSub: "Entry point for scoring rules and parameters; this version documents the current conventions only, in-app configuration comes later",
+      setBadge: "Planned",
+      setNote: "The items below are the conventions currently in effect and where they are maintained. Changing scoring rules breaks historical comparability, so a re-scan (or an offline re-score of cached data) is required before changes take effect.",
+      setNowLabel: "Current",
+      setTagPlanned: "Planned",
+      setWeightT: "Indicator weights",
+      setWeightD: "Adjust the weights of the three modules and their sub-items to compare matching results across conventions.",
+      setWeightNow: "Core pattern 0–50 + Chips & fundamentals 0–20 + Industry 0–30",
+      setThreshT: "Group thresholds",
+      setThreshD: "Set the score boundaries for the high / mid / low matching groups, changing group sizes and statistics.",
+      setThreshNow: "High ≥ 60 / Mid 30–59 / Low < 30 (the backtest uses the same)",
+      setHotT: "Hot industry list",
+      setHotD: "Maintain the hot industries matched by the industry module, keyed by SW level-1 industry names.",
+      setHotNow: "Maintained in config/hot_industries.json; UI editing to follow",
+      setFilterT: "Base filters",
+      setFilterD: "Adjust the exclusion rules applied before the candidate pool, affecting the sample universe.",
+      setFilterNow: "Excludes ST, listed under 365 days, suspended, and Beijing Stock Exchange stocks",
     },
   };
 
