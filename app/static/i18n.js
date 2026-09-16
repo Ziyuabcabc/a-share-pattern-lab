@@ -257,7 +257,7 @@
       btUnavailable: "暂无回测结果，请先在服务端执行回测脚本",
       btFootnote: "历史统计结果不代表未来表现；回测未扣除交易成本，未做统计显著性检验。",
 
-      /* 研究简报（v1.6.0） */
+      /* 研究简报（v1.6.1：七节结构） */
       repTitle: "研究简报",
       repSub: "按标准学术结构自动生成，数据与看板实时同步，同一批次可完整复现",
       btnRepPreview: "预览简报",
@@ -271,8 +271,9 @@
       repOutline2: "研究方法与规则",
       repOutline3: "历史回测结论",
       repOutline4: "当日候选池分析",
-      repOutline5: "研究局限性与风险提示",
-      repOutline6: "合规声明",
+      repOutline5: "研究结论与展望",
+      repOutline6: "研究局限性与风险提示",
+      repOutline7: "合规声明",
     },
 
     /* ----------------------------- English ---------------------------- */
@@ -509,7 +510,7 @@
       btUnavailable: "No backtest result yet — run the backtest script on the server first",
       btFootnote: "Historical statistics do not represent future performance. Trading costs are not deducted and no significance test is performed.",
 
-      /* Research note (v1.6.0) */
+      /* Research note (v1.6.1: seven sections) */
       repTitle: "Research Note",
       repSub: "Generated automatically in a standard academic structure, synchronized with the dashboard and fully reproducible for a given run",
       btnRepPreview: "Preview note",
@@ -523,8 +524,9 @@
       repOutline2: "Methodology and rules",
       repOutline3: "Backtest findings",
       repOutline4: "Candidate pool analysis",
-      repOutline5: "Limitations and risks",
-      repOutline6: "Compliance statement",
+      repOutline5: "Conclusions and outlook",
+      repOutline6: "Limitations and risks",
+      repOutline7: "Compliance statement",
     },
   };
 

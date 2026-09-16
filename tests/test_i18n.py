@@ -45,9 +45,9 @@ DYNAMIC_KEYS = {
     # BT_GROUP_KEY（回测分档标签，v1.6.0）
     "btGroupHigh", "btGroupMid", "btGroupLow",
     "btGrpHighShort", "btGrpMidShort", "btGrpLowShort",
-    # REP_OUTLINE_KEYS（研究简报六节目录，v1.6.0）
-    "repOutline1", "repOutline2", "repOutline3",
-    "repOutline4", "repOutline5", "repOutline6",
+    # REP_OUTLINE_KEYS（研究简报七节目录，v1.6.1 起由六节扩为七节）
+    "repOutline1", "repOutline2", "repOutline3", "repOutline4",
+    "repOutline5", "repOutline6", "repOutline7",
 }
 
 

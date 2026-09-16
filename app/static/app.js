@@ -2,7 +2,7 @@
    A股历史形态匹配研究看板 · 前端逻辑（本地运行版）
    数据来源：本地 FastAPI 接口（/api/*），全部为历史统计与指标展示。
    分数含义：与历史上升段启动样本的特征相似程度，不代表未来表现。
-   版本：v1.6.0（历史回测模块 + 研究简报自动生成；保留 v1.5.0 全部功能）
+   版本：v1.6.1（研究简报学术化重排；保留 v1.6.0 历史回测与 v1.5.0 全部功能）
 
    双语实现约定：
    - 所有界面文案走 I18N.t()（语言包见 static/i18n.js），页面内不散落文案；
@@ -1235,7 +1235,7 @@ function drawBacktestChart() {
    ========================================================================= */
 const REP_OUTLINE_KEYS = [
   "repOutline1", "repOutline2", "repOutline3",
-  "repOutline4", "repOutline5", "repOutline6",
+  "repOutline4", "repOutline5", "repOutline6", "repOutline7",
 ];
 
 function renderReportOutline() {

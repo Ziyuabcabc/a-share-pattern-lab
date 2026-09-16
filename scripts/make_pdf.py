@@ -77,18 +77,23 @@ def main() -> int:
                 path=str(dst),
                 format="A4",
                 print_background=True,
-                prefer_css_page_size=True,
                 display_header_footer=True,
                 header_template="<div></div>",
+                # 页脚必须用 table 布局：Chrome 的页眉页脚在独立渲染上下文中
+                # 对 flex 支持不完整，会把「/」当成独立 flex 项导致页码错位。
                 footer_template=(
-                    '<div style="width:100%;font-size:8px;color:#8a8f98;'
-                    'font-family:-apple-system,Segoe UI,sans-serif;'
-                    'padding:0 14mm;display:flex;justify-content:space-between;">'
-                    '<span>A 股历史形态匹配研究看板 · 研究简报</span>'
-                    '<span class="pageNumber"></span>/<span class="totalPages"></span>'
-                    "</div>"
+                    '<table style="width:100%;border:0;border-collapse:collapse;'
+                    'font-size:8px;color:#8a8f98;'
+                    'font-family:-apple-system,Segoe UI,PingFang SC,Microsoft YaHei,sans-serif;">'
+                    '<tr>'
+                    '<td style="text-align:left;padding:0 0 0 13mm;">'
+                    "A 股历史形态匹配研究看板 · 研究简报</td>"
+                    '<td style="text-align:right;padding:0 13mm 0 0;">'
+                    "第 <span class=\"pageNumber\"></span> 页 / 共 "
+                    "<span class=\"totalPages\"></span> 页</td>"
+                    "</tr></table>"
                 ),
-                margin={"top": "14mm", "bottom": "16mm", "left": "13mm", "right": "13mm"},
+                margin={"top": "14mm", "bottom": "18mm", "left": "13mm", "right": "13mm"},
             )
             browser.close()
     except Exception as exc:  # noqa: BLE001
