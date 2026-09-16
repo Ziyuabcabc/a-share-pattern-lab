@@ -473,6 +473,57 @@ body[data-lang="en"] td.ind-cell {
 .bt-foot { margin: 8px 0 0; font-size: var(--fs-micro); color: var(--faint); line-height: 1.6; }
 
 /* =========================================================================
+   v1.7.0 研究深度分析：分行业回测 / 显著性 / 稳健性 / 敏感性
+   ========================================================================= */
+/* 板块内小节标题（与主章节标题区分层级） */
+.sub-h3 {
+  margin: 22px 0 10px; font-size: var(--fs-body); font-weight: 600;
+  color: var(--text); letter-spacing: .01em;
+}
+.card-body > .sub-h3:first-child { margin-top: 4px; }
+
+/* 行业表格中的相对收益条 */
+.ind-bar-wrap {
+  display: inline-block; width: 100%; max-width: 120px; height: 6px;
+  background: var(--border-soft); border-radius: 3px; overflow: hidden;
+  vertical-align: middle;
+}
+.ind-bar { display: block; height: 100%; border-radius: 3px; transition: width .3s ease; }
+
+/* 行业排名双栏（相对靠前 / 相对靠后） */
+.rank-grid { display: grid; gap: var(--gap); grid-template-columns: repeat(auto-fit, minmax(320px, 1fr)); }
+.rank-card { border: 1px solid var(--border-soft); border-radius: var(--radius-sm); overflow: hidden; }
+.rank-head {
+  padding: 7px 12px; font-size: var(--fs-small); font-weight: 600;
+  background: var(--card-soft); border-bottom: 1px solid var(--border-soft);
+}
+.rank-head.up { color: var(--up); }
+.rank-head.down { color: var(--down); }
+.rank-tbl { width: 100%; border-collapse: separate; border-spacing: 0; table-layout: auto; }
+.rank-tbl td {
+  padding: 7px 12px; font-size: var(--fs-micro); border-bottom: 1px solid var(--border-soft);
+}
+.rank-tbl tr:last-child td { border-bottom: none; }
+.rank-name { font-weight: 600; color: var(--text); }
+.rank-tbl-head td { color: var(--faint); font-weight: 500; background: #fafbfc; }
+
+/* 状态标签：一致 / 不一致 / 样本不足 / 稳定 */
+.tag-ok, .tag-bad, .tag-mute {
+  display: inline-block; padding: 1px 7px; border-radius: 10px;
+  font-size: var(--fs-micro); font-weight: 600; line-height: 1.6; white-space: nowrap;
+}
+.tag-ok { color: var(--up); background: rgba(196, 87, 78, .09); }
+.tag-bad { color: var(--down); background: rgba(63, 156, 120, .09); }
+.tag-mute { color: var(--muted); background: var(--border-soft); }
+
+/* 敏感性表：参数分组首列 */
+#sensTable td[rowspan] { vertical-align: top; padding-top: 10px; }
+.sens-param b { display: block; }
+.sens-base { display: block; margin-top: 3px; font-size: var(--fs-micro); color: var(--faint); font-weight: 500; }
+#robTable, #sensTable, #sigTable { min-width: 780px; }
+#indBtChart { height: 320px; }
+
+/* =========================================================================
    研究简报（v1.6.0）
    ========================================================================= */
 .rep-outline {

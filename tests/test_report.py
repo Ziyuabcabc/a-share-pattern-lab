@@ -23,10 +23,14 @@ from app.backtest import data as bt_data
 PERF_HEADERS = ["分组", "样本数量", "组内平均得分", "上涨胜率", "平均收益率",
                 "超额收益", "最大回撤", "盈亏比"]
 
-# 简报固定章节（顺序即正文顺序）
+# 简报固定章节（顺序即正文顺序；v1.7.0 起为九节）
 SECTION_TITLES = ["一、研究摘要", "二、研究方法与规则", "三、历史回测结论",
-                  "四、当日候选池分析", "五、研究结论与展望",
-                  "六、研究局限性与风险提示", "七、合规声明"]
+                  "四、分行业回测", "五、多周期共振策略", "六、当日候选池分析",
+                  "七、研究结论与展望", "八、研究局限性与风险提示", "九、合规声明"]
+
+# v1.7.0 新增的四项分析在简报中的固定小节标题
+V17_SUBSECTIONS = ["2.6　参数敏感性分析", "3.4　统计显著性检验", "3.5　分年度稳健性检验",
+                   "4.1　行业覆盖与样本分布", "5.2　绩效对比"]
 
 
 # ---------------------------------------------------------------------------
@@ -208,7 +212,7 @@ def test_section_count_matches_frontend_outline(conn):
     from pathlib import Path
 
     html = rp.render_html(rp.collect(conn))
-    assert html.count("<h2>") == len(SECTION_TITLES) == 7
+    assert html.count("<h2>") == len(SECTION_TITLES) == 9
 
     app_js = (Path(__file__).resolve().parents[1] / "app" / "static" / "app.js").read_text(
         encoding="utf-8")
@@ -224,8 +228,10 @@ def test_report_limitations_always_present(conn):
     assert all(x.get("title") and x.get("body") for x in data["limitations"])
     blob = "".join(x["body"] for x in data["limitations"])
     assert "未来" in blob or "复现" in blob
-    # v1.6.1 新增：必须明确交代「未做统计显著性检验」
+    # v1.7.0：局限性必须交代「显著性检验的适用边界」与「分年度稳健性」
+    # （v1.6.1 的「未做显著性检验」表述已随研究进展被据实改写）
     assert "显著性" in blob
+    assert "分年度稳健性" in blob
 
 
 def test_report_includes_rule_table(conn):
@@ -259,12 +265,12 @@ def test_design_highlights_mention_lookahead_defence(conn):
 
 
 def test_conclusions_section_present(conn):
-    """新增「研究结论与展望」章节：核心发现 + 后续方向。"""
+    """「研究结论与展望」章节：核心发现 + 后续方向（v1.7.0 起为第七节）。"""
     data = rp.collect(conn)
     assert data["conclusions"]["findings"], "核心发现不得为空"
     assert len(data["conclusions"]["outlook"]) >= 3, "后续方向至少给出 3 条"
     html = rp.render_html(data)
-    assert "五、研究结论与展望" in html
+    assert "七、研究结论与展望" in html
     assert "后续可拓展方向" in html
 
 

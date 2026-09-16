@@ -58,6 +58,47 @@ def _group_of(score: float) -> str:
     return "low"
 
 
+@dataclass(frozen=True)
+class ScoreParams:
+    """回测打分所依赖的**可调参数**（v1.7.0 引入，供参数敏感性分析覆盖）。
+
+    默认值全部取自 ``app.config``，因此不传该对象时，回测行为与 v1.6.0
+    **逐位一致**。敏感性分析会构造若干变体，每个变体只改动其中一项，
+    其余保持基准，用于观察结论对该参数的依赖程度。
+
+    注意：这里只包含「会影响形态判定结果」的参数。分值与阈值
+    （``SCORE_*`` 权重、分组阈值 60/30、KDJ 参数）不在此列——
+    前者是研究设定的权重体系，后者本轮不作为敏感性考察对象。
+    """
+
+    macd_fast: int = config.MACD_FAST
+    macd_slow: int = config.MACD_SLOW
+    macd_dea: int = config.MACD_DEA_SPAN
+    volume_surge_ratio: float = config.VOLUME_SURGE_RATIO
+    volume_double_ratio: float = config.VOLUME_DOUBLE_RATIO
+    range_lookback_days: int = config.RANGE_LOOKBACK_DAYS
+    range_compact_ratio: float = config.RANGE_COMPACT_RATIO
+
+    @classmethod
+    def from_overrides(cls, overrides: dict | None = None) -> "ScoreParams":
+        """由部分覆盖字典构造；未给出的项取 config 默认值。"""
+        return cls(**(overrides or {}))
+
+    def overrides(self) -> dict:
+        """相对 config 默认值发生变化的项（为空表示即基准参数）。"""
+        base = ScoreParams()
+        return {
+            f: getattr(self, f) for f in self.__dataclass_fields__
+            if getattr(self, f) != getattr(base, f)
+        }
+
+    def label(self) -> str:
+        """人类可读的参数摘要（用于结果落库与展示）。"""
+        return (f"MACD({self.macd_fast},{self.macd_slow},{self.macd_dea})"
+                f" · 量能 {self.volume_surge_ratio}×"
+                f" · 振幅 {self.range_compact_ratio}@{self.range_lookback_days}d")
+
+
 @dataclass
 class BacktestParams:
     """回测参数（全部有默认值，可整体覆盖）。"""
@@ -67,6 +108,8 @@ class BacktestParams:
     step: int = config.BT_REBALANCE_STEP
     horizons: tuple[int, ...] = config.BT_HORIZONS
     warmup_bars: int = config.BT_WARMUP_BARS
+    # 形态判定参数（v1.7.0）：None 表示使用 config 默认值（与 v1.6 行为一致）
+    score: ScoreParams | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -78,12 +121,16 @@ def _prepare_stock(
     industry: str | None,
     cal_pos: dict[str, int],
     n_cal: int,
+    sp: ScoreParams | None = None,
 ) -> dict | None:
     """对单只股票预计算全序列指标与每日得分（一次算完，供所有调仓点复用）。
 
     关键：所有指标均为**滚动窗口**结果，第 i 格只依赖第 i 格及之前的数据，
     因此后续按任意调仓点取值都不含未来信息。
+
+    ``sp`` 为形态判定参数；缺省时使用 config 默认值，行为与 v1.6.0 一致。
     """
+    sp = sp or ScoreParams()
     n = len(df)
     if n < 20:
         return None
@@ -94,7 +141,7 @@ def _prepare_stock(
     volume = df["volume"].astype(float)
     open_ = df["open"].astype(float)
 
-    dif, dea, hist = macd(close)
+    dif, dea, hist = macd(close, sp.macd_fast, sp.macd_slow, sp.macd_dea)
     k, d, j = kdj(high, low, close)
 
     # 近5日均量（不含当日）——与 app/indicators.volume_stats 口径一致
@@ -105,17 +152,17 @@ def _prepare_stock(
     ret5 = close / close.shift(5) - 1.0
 
     # 近40日区间振幅（含当日）
-    hh40 = high.rolling(config.RANGE_LOOKBACK_DAYS).max()
-    ll40 = low.rolling(config.RANGE_LOOKBACK_DAYS).min()
+    hh40 = high.rolling(sp.range_lookback_days).max()
+    ll40 = low.rolling(sp.range_lookback_days).min()
     rr = hh40 / ll40.where(ll40 > 0)
 
     score = np.zeros(n, dtype=np.float64)
     score += config.SCORE_MACD_GOLD * ((dif > dea) & (hist > 0)).to_numpy()
     score += config.SCORE_KDJ_GOLD * ((k > d) & (j < 100)).to_numpy()
-    score += config.SCORE_VOLUME_SURGE * (ratio > config.VOLUME_SURGE_RATIO).to_numpy()
-    score += config.SCORE_VOLUME_DOUBLE * (ratio > config.VOLUME_DOUBLE_RATIO).to_numpy()
+    score += config.SCORE_VOLUME_SURGE * (ratio > sp.volume_surge_ratio).to_numpy()
+    score += config.SCORE_VOLUME_DOUBLE * (ratio > sp.volume_double_ratio).to_numpy()
     score += config.SCORE_RANGE_COMPACT * (
-        (rr <= config.RANGE_COMPACT_RATIO) & (ll40 > 0)
+        (rr <= sp.range_compact_ratio) & (ll40 > 0)
     ).to_numpy()
     score += config.SCORE_RETURN5_HEALTHY * (
         (ret5 >= config.RETURN5_MIN_PCT / 100.0)
@@ -193,9 +240,17 @@ def run_backtest(
     conn: sqlite3.Connection,
     params: BacktestParams | None = None,
     progress=None,
+    persist: bool = True,
 ) -> dict:
-    """执行一次完整回测并落库，返回结构化摘要。"""
+    """执行一次完整回测，返回结构化摘要。
+
+    ``persist=False`` 时**不写入 bt_runs / bt_stats / bt_equity / bt_trades**，
+    仅返回内存中的结果。参数敏感性分析需要跑多个参数变体，这些变体只是
+    对照样本、不是正式回测批次，因此必须用 ``persist=False`` 运行，
+    否则会污染「最新成功批次」，导致看板与简报读取到变体结果。
+    """
     params = params or BacktestParams()
+    sp = params.score or ScoreParams()
     bt_data.ensure_tables(conn)
     t0 = time.time()
 
@@ -233,7 +288,7 @@ def run_backtest(
         if any(kw in name.upper() for kw in config.EXCLUDE_NAME_KEYWORDS):
             excluded_st += 1
             continue
-        st = _prepare_stock(df, code, industry, cal_pos, n_cal)
+        st = _prepare_stock(df, code, industry, cal_pos, n_cal, sp)
         if st is not None:
             stocks[code] = st
     say(f"  可用股票 {len(stocks)} 只（剔除 ST/*ST/退市整理 {excluded_st} 只）")
@@ -440,12 +495,17 @@ def run_backtest(
             })
 
     # ---------------- 落库 ----------------
-    run_id = _save_run(conn, params, stocks, records, stats_rows, equity_rows, df_tr)
-    say(f"回测结果已落库 run_id={run_id}")
+    if persist:
+        run_id = _save_run(conn, params, stocks, records, stats_rows, equity_rows, df_tr)
+        say(f"回测结果已落库 run_id={run_id}")
+    else:
+        run_id = None
+        say("回测完成（参数变体，按调用方要求不落库）")
 
     summary = {
         "available": True,
         "run_id": run_id,
+        "persisted": bool(persist),
         "generated_at": datetime.now().isoformat(timespec="seconds"),
         "start_date": eff_start,
         "end_date": eff_end,
@@ -458,6 +518,17 @@ def run_backtest(
         "obs_count": len(records),
         "trade_count": len(df_tr),
         "score_max": config.BT_SCORE_MAX,
+        "score_params": {
+            "label": sp.label(),
+            "macd_fast": sp.macd_fast,
+            "macd_slow": sp.macd_slow,
+            "macd_dea": sp.macd_dea,
+            "volume_surge_ratio": sp.volume_surge_ratio,
+            "volume_double_ratio": sp.volume_double_ratio,
+            "range_lookback_days": sp.range_lookback_days,
+            "range_compact_ratio": sp.range_compact_ratio,
+            "overrides": sp.overrides(),
+        },
         "score_thresholds": {
             "high": config.HIGH_SCORE_THRESHOLD,
             "mid": config.MID_SCORE_THRESHOLD,
@@ -484,12 +555,14 @@ def run_backtest(
     }
     # 摘要整体落库：接口与简报直接读取，避免每次请求重算。
     # 同时用实际生效区间覆盖落库的起止日期（入参可能为空）。
-    conn.execute(
-        "UPDATE bt_runs SET summary=?, start_date=?, end_date=?, obs_count=? WHERE id=?",
-        (json.dumps(summary, ensure_ascii=False), eff_start, eff_end,
-         len(records), run_id),
-    )
-    conn.commit()
+    # 参数变体（persist=False）不写库，直接返回内存结果。
+    if persist and run_id is not None:
+        conn.execute(
+            "UPDATE bt_runs SET summary=?, start_date=?, end_date=?, obs_count=? WHERE id=?",
+            (json.dumps(summary, ensure_ascii=False), eff_start, eff_end,
+             len(records), run_id),
+        )
+        conn.commit()
     return summary
 
 
@@ -527,6 +600,7 @@ def _save_run(
 ) -> int:
     """把回测结果写入 bt_runs / bt_stats / bt_equity / bt_trades。"""
     now = datetime.now().isoformat(timespec="seconds")
+    sp = params.score or ScoreParams()
     cur = conn.execute(
         "INSERT INTO bt_runs (created_at, start_date, end_date, step, horizons, "
         "stock_count, obs_count, score_max, params, status) "
@@ -536,7 +610,8 @@ def _save_run(
          config.BT_SCORE_MAX,
          json.dumps({"step": params.step,
                      "horizons": list(params.horizons),
-                     "warmup_bars": params.warmup_bars}, ensure_ascii=False),
+                     "warmup_bars": params.warmup_bars,
+                     "score": sp.__dict__}, ensure_ascii=False),
          "success"),
     )
     run_id = int(cur.lastrowid)

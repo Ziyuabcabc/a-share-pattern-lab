@@ -137,6 +137,39 @@ _DDL = (
     )
     """,
     "CREATE INDEX IF NOT EXISTS idx_bt_trades_run ON bt_trades(run_id, group_name)",
+    # ---------------- v1.7.0 研究深度升级新增表（全部为二次统计结果） ----------------
+    """
+    CREATE TABLE IF NOT EXISTS bt_industry (
+        run_id     INTEGER NOT NULL,
+        industry   TEXT NOT NULL,
+        group_name TEXT NOT NULL,
+        horizon    INTEGER NOT NULL,
+        samples    INTEGER,
+        win_rate   REAL,
+        avg_return REAL,
+        max_drawdown REAL,
+        PRIMARY KEY (run_id, industry, group_name, horizon)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bt_industry_run ON bt_industry(run_id, industry)",
+    """
+    CREATE TABLE IF NOT EXISTS bt_resonance (
+        run_id    INTEGER NOT NULL,
+        obs_date  TEXT NOT NULL,
+        code      TEXT NOT NULL,
+        weekly_ok INTEGER,
+        PRIMARY KEY (run_id, obs_date, code)
+    )
+    """,
+    "CREATE INDEX IF NOT EXISTS idx_bt_resonance_run ON bt_resonance(run_id, weekly_ok)",
+    """
+    CREATE TABLE IF NOT EXISTS bt_sensitivity (
+        run_id       INTEGER NOT NULL,
+        generated_at TEXT,
+        payload      TEXT,
+        PRIMARY KEY (run_id)
+    )
+    """,
 )
 
 

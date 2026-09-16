@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A 股历史形态匹配研究看板 · 本地运行版</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css?v=1.6.1">
+<link rel="stylesheet" href="/static/app.css?v=1.7.0">
 </head>
 <body>
 
@@ -168,6 +168,10 @@
         <p class="card-sub" id="btSub" data-i18n="btSub">按形态匹配分分档，统计历史持仓 5 / 10 / 20 个交易日的绩效表现；回测用未来信息已严格规避</p>
       </div>
       <div class="filters">
+        <div class="seg" id="btMode" role="group" data-i18n-aria="btModeAria" aria-label="对比口径">
+          <button type="button" class="seg-opt is-on" data-mode="tier" data-i18n="btModeTier">分档绩效</button>
+          <button type="button" class="seg-opt" data-mode="resonance" data-i18n="btModeResonance">共振对比</button>
+        </div>
         <div class="seg" id="btHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
           <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
           <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
@@ -179,7 +183,7 @@
     <div class="card-body">
       <div class="bt-meta" id="btMeta"></div>
       <div class="chart-box chart-bt" id="btChart"></div>
-      <div class="table-wrap table-bt">
+      <div class="table-wrap table-bt" id="btTierWrap">
         <table id="btTable">
           <colgroup>
             <col style="width:20%"><col style="width:13%"><col style="width:13%">
@@ -198,9 +202,163 @@
           </thead>
           <tbody id="btBody"></tbody>
         </table>
-        <div class="empty" id="btEmpty" hidden data-i18n="btEmpty">暂无回测结果 —— 请先构建回测数据并执行回测</div>
       </div>
+      <!-- 共振对比：双共振分组 vs 单日线高匹配分组（v1.7.0） -->
+      <div class="table-wrap table-bt" id="btResWrap" hidden>
+        <table id="btResTable">
+          <colgroup>
+            <col style="width:18%"><col style="width:12%"><col style="width:12%">
+            <col style="width:14%"><col style="width:16%"><col style="width:14%"><col style="width:14%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="rsThScope">对比口径</th>
+              <th class="num" data-i18n="btThSamples">样本数</th>
+              <th class="num" data-i18n="btThWin">上涨胜率</th>
+              <th class="num" data-i18n="btThAvg">平均收益率</th>
+              <th class="num" data-i18n="btThMdd">最大回撤</th>
+              <th class="num" data-i18n="rsThWinDiff">胜率之差</th>
+              <th class="num" data-i18n="rsThRetDiff">收益之差</th>
+            </tr>
+          </thead>
+          <tbody id="btResBody"></tbody>
+        </table>
+        <p class="bt-foot" id="btResNote"></p>
+      </div>
+      <div class="empty" id="btEmpty" hidden data-i18n="btEmpty">暂无回测结果 —— 请先构建回测数据并执行回测</div>
       <p class="bt-method" id="btMethod"></p>
+    </div>
+  </section>
+
+  <!-- ===================== 分行业回测（v1.7.0） ===================== -->
+  <section class="card" id="indBtCard">
+    <div class="card-head">
+      <div class="card-title">
+        <h2 data-i18n="indBtTitle">分行业回测</h2>
+        <p class="card-sub" id="indBtSub" data-i18n="indBtSub">按申万一级行业拆分高 / 中 / 低匹配分组的历史绩效；结果由回测明细二次聚合，与「策略回测」同源可对账</p>
+      </div>
+      <div class="filters">
+        <select id="indSel" class="filters-select"></select>
+        <div class="seg" id="indHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
+          <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
+          <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
+          <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+        </div>
+        <button class="btn btn-ghost" id="btnIndCsv" data-i18n="btnIndCsv">导出分行业明细</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="bt-meta" id="indBtMeta"></div>
+      <div class="chart-box" id="indBtChart"></div>
+      <div class="table-wrap table-bt">
+        <table id="indBtTable">
+          <colgroup>
+            <col style="width:22%"><col style="width:12%"><col style="width:13%">
+            <col style="width:15%"><col style="width:15%"><col style="width:23%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="btThGroup">分组</th>
+              <th class="num" data-i18n="btThSamples">样本数</th>
+              <th class="num" data-i18n="btThWin">上涨胜率</th>
+              <th class="num" data-i18n="btThAvg">平均收益率</th>
+              <th class="num" data-i18n="btThMdd">最大回撤</th>
+              <th class="num" data-i18n="indThBar">相对展示</th>
+            </tr>
+          </thead>
+          <tbody id="indBtBody"></tbody>
+        </table>
+        <div class="empty" id="indBtEmpty" hidden data-i18n="indBtEmpty">暂无分行业回测结果 —— 请先运行 v1.7 分析构建</div>
+      </div>
+      <div class="rank-pair" id="indRankPair"></div>
+      <p class="bt-foot" id="indBtFoot"></p>
+    </div>
+  </section>
+
+  <!-- ===================== 稳健性与敏感性（v1.7.0） ===================== -->
+  <section class="card" id="robCard">
+    <div class="card-head">
+      <div class="card-title">
+        <h2 data-i18n="robTitle">统计检验与参数稳健性</h2>
+        <p class="card-sub" id="robSub" data-i18n="robSub">高 / 低匹配分组的 Welch t 检验、分年度稳健性拆解，以及 3 组核心参数的敏感性对照</p>
+      </div>
+      <span class="hint" id="robMeta"></span>
+    </div>
+    <div class="card-body">
+      <h3 class="sub-h3" data-i18n="robSecSig">一、分组差异的统计显著性（Welch t 检验）</h3>
+      <div class="table-wrap table-bt">
+        <table id="sigTable">
+          <colgroup>
+            <col style="width:11%"><col style="width:13%"><col style="width:13%">
+            <col style="width:13%"><col style="width:12%"><col style="width:11%"><col style="width:17%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="btThHorizon">持仓周期</th>
+              <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
+              <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
+              <th class="num" data-i18n="sigThDiff">均值差异</th>
+              <th class="num" data-i18n="sigThT">t 值</th>
+              <th class="num" data-i18n="sigThP">p 值</th>
+              <th class="num" data-i18n="sigThCi">95% 置信区间（差异）</th>
+            </tr>
+          </thead>
+          <tbody id="sigBody"></tbody>
+        </table>
+        <div class="empty" id="sigEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+      </div>
+      <p class="bt-foot" id="sigFoot"></p>
+
+      <h3 class="sub-h3" data-i18n="robSecYear">二、分年度稳健性检验</h3>
+      <div class="table-wrap table-bt">
+        <table id="robTable">
+          <colgroup>
+            <col style="width:10%"><col style="width:10%"><col style="width:11%">
+            <col style="width:12%"><col style="width:12%"><col style="width:12%">
+            <col style="width:12%"><col style="width:13%"><col style="width:8%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="robThYear">年度</th>
+              <th class="num" data-i18n="btThHorizon">持仓周期</th>
+              <th class="num" data-i18n="robThNh">高分组样本</th>
+              <th class="num" data-i18n="sigThHigh">高匹配分组均值</th>
+              <th class="num" data-i18n="sigThLow">低匹配分组均值</th>
+              <th class="num" data-i18n="sigThDiff">均值差异</th>
+              <th class="num" data-i18n="robThWdiff">胜率之差</th>
+              <th class="num" data-i18n="robThDir">方向是否一致</th>
+              <th class="num" data-i18n="robThEnough">样本充足</th>
+            </tr>
+          </thead>
+          <tbody id="robBody"></tbody>
+        </table>
+        <div class="empty" id="robEmpty" hidden data-i18n="sigEmpty">暂无检验结果</div>
+      </div>
+      <p class="bt-foot" id="robFoot"></p>
+
+      <h3 class="sub-h3" data-i18n="robSecSens">三、参数敏感性分析</h3>
+      <div class="table-wrap table-bt">
+        <table id="sensTable">
+          <colgroup>
+            <col style="width:15%"><col style="width:13%"><col style="width:11%">
+            <col style="width:15%"><col style="width:12%"><col style="width:17%"><col style="width:17%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="sensThParam">考察参数</th>
+              <th data-i18n="sensThValue">参数取值</th>
+              <th class="num" data-i18n="sensThWin">胜率</th>
+              <th class="num" data-i18n="sensThRet">高匹配分组收益</th>
+              <th class="num" data-i18n="sensThDelta">相对基准变动</th>
+              <th class="num" data-i18n="sensThDir">分组方向</th>
+              <th class="num" data-i18n="sensThStable">幅度稳定性</th>
+            </tr>
+          </thead>
+          <tbody id="sensBody"></tbody>
+        </table>
+        <div class="empty" id="sensEmpty" hidden data-i18n="sensEmpty">暂无敏感性分析结果</div>
+      </div>
+      <p class="bt-foot" id="sensFoot"></p>
     </div>
   </section>
 
@@ -279,8 +437,8 @@
   </div>
 </aside>
 
-<script src="/static/i18n.js?v=1.6.1"></script>
-<script src="/static/vendor/echarts.min.js?v=1.6.1"></script>
-<script src="/static/app.js?v=1.6.1"></script>
+<script src="/static/i18n.js?v=1.7.0"></script>
+<script src="/static/vendor/echarts.min.js?v=1.7.0"></script>
+<script src="/static/app.js?v=1.7.0"></script>
 </body>
 </html>

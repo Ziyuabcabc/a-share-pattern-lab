@@ -142,6 +142,89 @@ BT_CACHE_KEY = "backtest_summary_cache"
 BT_TRADES_CSV_LIMIT = 200000   # 明细导出上限（防止误导出超大文件）
 
 # ---------------------------------------------------------------------------
+# 研究深度升级（v1.7.0）：分行业回测 / 显著性检验 / 参数敏感性 / 多周期共振
+# 全部为对已有历史回测数据的二次统计，不改变 v1.6 的扫描与打分口径。
+# ---------------------------------------------------------------------------
+
+# --- 一、分行业回测 ---
+# 单个（行业 × 分组 × 周期）的有效样本数下限：低于该值时仍如实展示数值，
+# 但在简报与前端标注「样本不足」，避免据小样本下结论。
+IND_MIN_SAMPLES = 30
+# 简报中展示的效果最好 / 最差行业数量（按高匹配分组平均收益率排序）
+IND_TOP_N = 5
+# 排序所用的参照周期（交易日）：取最长持仓周期，结论最具代表性
+IND_RANK_HORIZON = 20
+# 行业回测覆盖的申万一级行业总数（用于口径说明与覆盖率自检）
+IND_EXPECTED_COUNT = 31
+# 行业字段的兜底占位值（与 app/scanner.INDUSTRY_FALLBACK 保持一致）。
+# 这些值表示「未能匹配到申万一级行业」，不属于任何一级行业分类，
+# 统计时须排除，否则会把未分类个股混进行业排名。
+INDUSTRY_PLACEHOLDERS = ("其他", "未分类")
+# 行业明细 CSV 导出上限
+IND_CSV_LIMIT = 5000
+
+# --- 二、统计显著性检验 ---
+# 显著性水平：p < SIG_ALPHA 时判定为「在 5% 水平上显著」
+SIG_ALPHA = 0.05
+# 参与 t 检验的最小样本数（低于该值不出检验结论，仅标注样本不足）
+SIG_MIN_SAMPLES = 30
+# 分年度稳健性检验：单年度有效样本数低于该值时不纳入「方向一致性」判定
+# （回测区间首尾年份通常只有部分月份，样本天然偏少）
+ROBUST_MIN_SAMPLES = 100
+
+# --- 三、参数敏感性分析 ---
+# 3 组核心参数，每组除基准档外再取 2 个扰动档（只改这一个参数，其余保持基准）。
+# 每跑一次变体即为一次全量回测，用于观察「结论是否依赖特定参数取值」。
+SENSITIVITY_GROUPS = (
+    {
+        "key": "macd",
+        "label": "MACD 参数",
+        "base_label": f"({MACD_FAST},{MACD_SLOW},{MACD_DEA_SPAN})",
+        "variants": (
+            ("macd_short", f"({MACD_FAST - 1},{MACD_SLOW - 2},{MACD_DEA_SPAN - 1})",
+             {"macd_fast": MACD_FAST - 1, "macd_slow": MACD_SLOW - 2,
+              "macd_dea": MACD_DEA_SPAN - 1}),
+            ("macd_long", f"({MACD_FAST + 2},{MACD_SLOW + 4},{MACD_DEA_SPAN + 2})",
+             {"macd_fast": MACD_FAST + 2, "macd_slow": MACD_SLOW + 4,
+              "macd_dea": MACD_DEA_SPAN + 2}),
+        ),
+    },
+    {
+        "key": "volume",
+        "label": "量能放大倍数",
+        "base_label": f"{VOLUME_SURGE_RATIO} 倍",
+        "variants": (
+            ("vol_low", "1.2 倍", {"volume_surge_ratio": 1.2}),
+            ("vol_high", "1.5 倍", {"volume_surge_ratio": 1.5}),
+        ),
+    },
+    {
+        "key": "range",
+        "label": "近 40 日振幅阈值",
+        "base_label": f"{RANGE_COMPACT_RATIO}",
+        "variants": (
+            ("range_tight", "1.6（更严）", {"range_compact_ratio": 1.6}),
+            ("range_loose", "2.0（更宽）", {"range_compact_ratio": 2.0}),
+        ),
+    },
+)
+# 「幅度稳定」判定阈值（百分点）：全部变体在高匹配分组平均收益率上的
+# 最大绝对变动不超过该值时，认为结论对该参数不敏感。
+SENSITIVITY_STABLE_PP = 2.0
+
+# --- 四、多周期共振策略 ---
+# 周线由日线按自然周合成（收盘取当周最后一个交易日、最高/最低取周内极值、
+# 成交量取周内合计），指标口径与日线同源：MACD(3,6,3) 与 KDJ(9,3,3) 全部沿用。
+#
+# 时序约束（避免未来函数）：观察日 T 只允许使用**已收盘**的周线，
+# 即该周最后一个交易日的日期必须 ≤ T 且该周在日历上已结束；
+# 当周尚未走完时不使用当周数据。
+WEEKLY_MIN_BARS = 30           # 周线预热下限：MACD/KDJ 可算所需的最少周线根数
+# 「日线 + 周线双共振」的日线侧门槛：日线须已进入高匹配分组。
+# 周线侧要求 MACD 金叉（红柱 > 0）与 KDJ 金叉（J < 100）同时成立。
+RESONANCE_DAILY_THRESHOLD = HIGH_SCORE_THRESHOLD
+
+# ---------------------------------------------------------------------------
 # 研究简报（v1.6.0）
 # ---------------------------------------------------------------------------
 REPORT_TITLE = "A 股形态匹配量化研究简报"

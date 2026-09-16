@@ -2,7 +2,8 @@
    A股历史形态匹配研究看板 · 前端逻辑（本地运行版）
    数据来源：本地 FastAPI 接口（/api/*），全部为历史统计与指标展示。
    分数含义：与历史上升段启动样本的特征相似程度，不代表未来表现。
-   版本：v1.6.1（研究简报学术化重排；保留 v1.6.0 历史回测与 v1.5.0 全部功能）
+   版本：v1.7.0（新增分行业回测、统计显著性检验、参数敏感性分析、多周期共振；
+   保留 v1.6.1 研究简报与 v1.6.0 历史回测及 v1.5.0 全部功能）
 
    双语实现约定：
    - 所有界面文案走 I18N.t()（语言包见 static/i18n.js），页面内不散落文案；
@@ -65,7 +66,17 @@ const state = {
   bt: null,               // 回测摘要（一次拉取，切周期/切语言均本地重绘）
   btHorizon: 10,          // 当前持仓周期（交易日）
   btChart: null,          // 回测净值曲线图实例
+  btMode: "tier",         // 回测对比口径：tier=三档分档绩效，resonance=日线+周线共振
   repMeta: "",            // 研究简报最近一次导出时间
+
+  /* v1.7.0 研究深度分析（四项，各自独立加载、互不阻塞） */
+  industry: null,         // 分行业回测
+  significance: null,     // Welch t 检验 + 分年度稳健性
+  resonance: null,        // 日线 + 周线双共振对比
+  sensitivity: null,      // 参数敏感性分析
+  indHorizon: 10,         // 分行业板块当前持仓周期
+  indIndustry: null,      // 分行业板块当前选中行业（null = 自动取首个）
+  indChart: null,         // 分行业收益对比图实例
 };
 
 const $ = (id) => document.getElementById(id);
@@ -178,6 +189,10 @@ function rerenderAll() {
   renderNewsMeta();
   renderNewsNote();
   renderBacktest();
+  renderIndustryBt();
+  renderSignificance();
+  renderRobustness();
+  renderSensitivity();
   renderReportOutline();
   renderReportMeta();
   if (!state.polling) $("scanLog").textContent = t("scanLogIdle");
@@ -191,6 +206,7 @@ async function refreshAll() {
   loadIndices();
   loadNews();
   loadBacktest();
+  loadAnalysis();
   renderReportOutline();
   renderReportMeta();
   await Promise.all([loadStatus(), loadFilters()]);
@@ -1047,6 +1063,7 @@ function resizeCharts() {
   state.chart && state.chart.resize();
   state.detailChart && state.detailChart.resize();
   state.btChart && state.btChart.resize();
+  state.indChart && state.indChart.resize();
 }
 
 /* =========================================================================
@@ -1107,6 +1124,9 @@ function renderBacktest() {
   for (const b of document.querySelectorAll("#btHorizon .seg-opt")) {
     b.classList.toggle("is-on", Number(b.dataset.h) === state.btHorizon);
   }
+  for (const b of document.querySelectorAll("#btMode .seg-opt")) {
+    b.classList.toggle("is-on", b.dataset.mode === state.btMode);
+  }
 
   // 概况条
   const bm = d.benchmark || {};
@@ -1121,16 +1141,27 @@ function renderBacktest() {
   $("btMeta").innerHTML = items
     .map(([k, v]) => `<span>${esc(t(k))}　<b>${esc(v)}</b></span>`).join("");
 
+  // 两种口径互斥展示：分档绩效（三组） / 共振对比（双共振 vs 单日线）
+  const showRes = state.btMode === "resonance";
+  const resOk = !!(state.resonance && state.resonance.available);
+  $("btTierWrap").hidden = showRes;
+  $("btResWrap").hidden = !showRes || !resOk;
+
   renderBacktestTable();
+  if (showRes) renderResonanceTable();
   drawBacktestChart();
 
   // 方法学说明（折叠展示，避免占用主视觉）
   const notes = d.method_notes || [];
-  $("btMethod").innerHTML = notes.length
-    ? `<details class="bt-notes"><summary>${esc(t("btDialogTitle"))}</summary><ol>${
-        notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>`
-      + `<p class="bt-foot">${esc(t("btFootnote"))}</p>`
-    : `<p class="bt-foot">${esc(t("btFootnote"))}</p>`;
+  $("btMethod").innerHTML = showRes
+    ? (resOk
+        ? `<p class="bt-foot">${esc(t("rsFootnote"))}</p>`
+        : `<p class="bt-foot">${esc(t("rsUnavailable"))}</p>`)
+    : (notes.length
+        ? `<details class="bt-notes"><summary>${esc(t("btDialogTitle"))}</summary><ol>${
+            notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>`
+          + `<p class="bt-foot">${esc(t("btFootnote"))}</p>`
+        : `<p class="bt-foot">${esc(t("btFootnote"))}</p>`);
 }
 
 function renderBacktestTable() {
@@ -1153,10 +1184,41 @@ function renderBacktestTable() {
   }).join("");
 }
 
+const RS_COLOR = { resonance: "#7b73c9", daily: "#3b6fd4" };
+
+/* 共振对比表：双共振分组 vs 单日线高匹配分组（当前持仓周期） */
+function renderResonanceTable() {
+  const res = state.resonance;
+  const body = $("btResBody");
+  if (!res || !res.available) { body.innerHTML = ""; return; }
+  const row = (res.stats_by_horizon || {})[String(state.btHorizon)];
+  if (!row) { body.innerHTML = ""; return; }
+  const fmtRow = (label, s, color, diff) => `<tr>
+      <td><span class="grp-dot" style="background:${color}"></span>${esc(label)}</td>
+      <td class="num">${(s.samples || 0).toLocaleString()}</td>
+      <td class="num">${s.win_rate == null ? "—" : (Number(s.win_rate) * 100).toFixed(1) + "%"}</td>
+      <td class="num ${pctCls(s.avg_return)}">${btPct(s.avg_return)}</td>
+      <td class="num">${s.max_drawdown == null ? "—" : (Number(s.max_drawdown) * 100).toFixed(2) + "%"}</td>
+      <td class="num ${diff && diff.win_rate != null ? pctCls(diff.win_rate) : ""}">${
+        diff && diff.win_rate != null ? btPct(diff.win_rate) : "—"}</td>
+      <td class="num ${diff && diff.avg_return != null ? pctCls(diff.avg_return) : ""}">${
+        diff && diff.avg_return != null ? btPct(diff.avg_return) : "—"}</td>
+    </tr>`;
+  body.innerHTML =
+    fmtRow(res.resonance.label, res.resonance, RS_COLOR.resonance, row.diff)
+    + fmtRow(res.daily_high.label, res.daily_high, RS_COLOR.daily, null);
+  const note = t("rsNote", {
+    rate: (Number(res.weekly_hit_rate || 0) * 100).toFixed(1),
+    rows: (res.marked_rows || 0).toLocaleString(),
+  });
+  $("btResNote").textContent = note;
+}
+
 function drawBacktestChart() {
   const el = $("btChart");
   const d = state.bt;
   if (!d || !d.available) return;
+  if (state.btMode === "resonance") { drawResonanceChart(el); return; }
   const h = String(state.btHorizon);
   const eq = d.equity || {};
   const bench = (d.benchmark_equity || {})[h] || [];
@@ -1228,14 +1290,435 @@ function drawBacktestChart() {
   state.btChart.resize();
 }
 
+/* 共振模式图表：三个持仓周期上「双共振 / 单日线」平均收益率的对照柱状图 */
+function drawResonanceChart(el) {
+  const res = state.resonance;
+  const stats = (res && res.stats) || [];
+  if (!stats.length) {
+    if (state.btChart) { state.btChart.dispose(); state.btChart = null; }
+    el.innerHTML = `<div class="empty">${esc(t("rsUnavailable"))}</div>`;
+    return;
+  }
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  if (!state.btChart) state.btChart = echarts.init(el);
+  const cats = stats.map((s) => `${s.horizon}${t("btUnitDays")}`);
+  const pct = (v) => (v == null ? null : Number(v) * 100);
+  state.btChart.setOption({
+    animationDuration: 480,
+    textStyle: { fontFamily: "inherit" },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255,255,255,.97)",
+      borderColor: C.border, borderWidth: 1, padding: [9, 12],
+      textStyle: { color: C.text, fontSize: 12 },
+      valueFormatter: (v) => (v == null ? "--" : `${Number(v) > 0 ? "+" : ""}${Number(v).toFixed(2)}%`),
+    },
+    legend: {
+      top: 0, right: 4, itemWidth: 14, itemHeight: 8, itemGap: 16,
+      textStyle: { color: C.text2, fontSize: 11 },
+    },
+    grid: { left: 56, right: 22, top: 34, bottom: 34 },
+    xAxis: {
+      type: "category", data: cats,
+      axisLine: { lineStyle: { color: C.border } },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, color: C.axis },
+    },
+    yAxis: {
+      type: "value", scale: true,
+      splitLine: { lineStyle: { color: C.grid } },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { fontSize: 10, color: C.axis, formatter: (v) => `${v.toFixed(1)}%` },
+    },
+    series: [
+      {
+        name: res.resonance_label || t("rsLegendResonance"),
+        type: "bar", barMaxWidth: 34, barGap: "18%",
+        data: stats.map((s) => pct(s.resonance.avg_return)),
+        itemStyle: { color: RS_COLOR.resonance, borderRadius: [3, 3, 0, 0] },
+      },
+      {
+        name: t("rsLegendDaily"),
+        type: "bar", barMaxWidth: 34,
+        data: stats.map((s) => pct(s.daily_high.avg_return)),
+        itemStyle: { color: RS_COLOR.daily, borderRadius: [3, 3, 0, 0] },
+      },
+    ],
+  }, true);
+  state.btChart.resize();
+}
+
+/* =========================================================================
+   v1.7.0 研究深度分析（四项）
+   -------------------------------------------------------------------------
+   分行业回测 / 统计显著性 / 参数敏感性 / 多周期共振，全部为对已有历史回测
+   批次的二次统计，一次拉取后缓存在 state，切周期与切语言都只做本地重绘。
+   四个接口互相独立：任一失败只影响对应板块，其余照常渲染。
+   ========================================================================= */
+const GRP_COLOR = { high: "#c4574e", mid: "#d99a3d", low: "#8c93a3" };
+const IND_BAR_POS = "#c4574e";   // A 股惯例：正收益红
+const IND_BAR_NEG = "#3f9c78";   // 负收益绿
+
+async function loadAnalysis() {
+  const jobs = [
+    ["industry", "/api/analysis/industry"],
+    ["significance", "/api/analysis/significance"],
+    ["resonance", "/api/analysis/resonance"],
+    ["sensitivity", "/api/analysis/sensitivity"],
+  ];
+  await Promise.all(jobs.map(async ([key, url]) => {
+    try {
+      state[key] = await get(url);
+    } catch {
+      state[key] = null;
+    }
+  }));
+  renderIndustryBt();
+  renderSignificance();
+  renderRobustness();
+  renderSensitivity();
+  // 共振数据到达后，若当前正处在共振口径需重绘回测板块
+  if (state.bt && state.btMode === "resonance") renderBacktest();
+}
+
+/* ---------------- 分行业回测 ---------------- */
+function indRowsOf(d, industry, h) {
+  return ((d.by_industry || {})[industry] || {})[String(h)] || {};
+}
+
+function renderIndustryBt() {
+  const d = state.industry;
+  const sel = $("indSel");
+  const ok = d && d.available;
+  $("indBtEmpty").hidden = !!ok;
+  if (!ok) {
+    $("indBtBody").innerHTML = "";
+    $("indBtMeta").innerHTML = "";
+    $("indRankPair").innerHTML = "";
+    $("indBtFoot").innerHTML = "";
+    sel.innerHTML = "";
+    if (state.indChart) { state.indChart.dispose(); state.indChart = null; }
+    $("indBtChart").innerHTML = "";
+    $("indBtEmpty").textContent = (d && d.reason) ? d.reason : t("indBtEmpty");
+    return;
+  }
+
+  const hs = (d.horizons || []).map(Number);
+  if (!hs.includes(state.indHorizon)) state.indHorizon = hs.includes(20) ? 20 : hs[0];
+  for (const b of document.querySelectorAll("#indHorizon .seg-opt")) {
+    b.classList.toggle("is-on", Number(b.dataset.h) === state.indHorizon);
+  }
+
+  // 行业下拉：有高匹配分组样本的行业优先，其余按名称排列
+  const ranked = (d.ranking || []).map((x) => x.industry);
+  const rest = (d.universe || []).filter((x) => !ranked.includes(x));
+  const order = ranked.concat(rest);
+  if (!order.includes(state.indIndustry)) state.indIndustry = order[0] || null;
+  sel.innerHTML = order.map((name) => {
+    const mark = ranked.includes(name) ? "" : `　·　${t("indSelNoHigh")}`;
+    return `<option value="${esc(name)}">${esc(name)}${esc(mark)}</option>`;
+  }).join("");
+  sel.value = state.indIndustry || "";
+
+  // 概况条
+  const c = d.concentration || {};
+  $("indBtMeta").innerHTML = [
+    ["indMetaCovered", `${d.covered_count || 0} / ${d.industry_count || 0}`],
+    ["indMetaRanked", `${(d.ranking || []).length}`],
+    ["indMetaRankH", `${d.rank_horizon || "--"} ${t("btUnitDays")}`],
+    ["indMetaMin", `${d.min_samples || "--"}`],
+    ["indMetaTop3", `${((c.top3_share || 0) * 100).toFixed(1)}%`],
+  ].map(([k, v]) => `<span>${esc(t(k))}　<b>${esc(v)}</b></span>`).join("");
+
+  renderIndustryTable();
+  drawIndustryBtChart();
+  renderIndustryRank();
+
+  $("indBtFoot").textContent = t("indBtFoot", {
+    n: d.min_samples || 0,
+    industries: (c.top_industries || []).join("、") || "—",
+    share: ((c.top3_share || 0) * 100).toFixed(1),
+  });
+}
+
+function renderIndustryTable() {
+  const d = state.industry;
+  const cells = indRowsOf(d, state.indIndustry, state.indHorizon);
+  const maxAbs = Math.max(
+    1e-9,
+    ...["high", "mid", "low"].map((g) => Math.abs(Number((cells[g] || {}).avg_return) || 0)),
+  );
+  $("indBtBody").innerHTML = BT_ORDER.map((g) => {
+    const r = cells[g];
+    const color = GRP_COLOR[g] || C.flat;
+    if (!r) {
+      return `<tr><td><span class="grp-dot" style="background:${color}"></span>${esc(btGroupLabel(g))}</td>
+        <td class="num">—</td><td class="num">—</td><td class="num">—</td><td class="num">—</td>
+        <td class="num">${esc(t("indNoData"))}</td></tr>`;
+    }
+    const v = Number(r.avg_return) || 0;
+    const w = Math.max(2, Math.round((Math.abs(v) / maxAbs) * 100));
+    const bar = `<span class="ind-bar-wrap"><span class="ind-bar" style="width:${w}%;background:${
+      v >= 0 ? IND_BAR_POS : IND_BAR_NEG}"></span></span>`;
+    return `<tr>
+      <td><span class="grp-dot" style="background:${color}"></span>${esc(btGroupLabel(g))}</td>
+      <td class="num">${(r.samples || 0).toLocaleString()}</td>
+      <td class="num">${r.win_rate == null ? "—" : (Number(r.win_rate) * 100).toFixed(1) + "%"}</td>
+      <td class="num ${pctCls(r.avg_return)}">${btPct(r.avg_return)}</td>
+      <td class="num">${r.max_drawdown == null ? "—" : (Number(r.max_drawdown) * 100).toFixed(2) + "%"}</td>
+      <td class="num">${bar}</td>
+    </tr>`;
+  }).join("");
+}
+
+function drawIndustryBtChart() {
+  const el = $("indBtChart");
+  const d = state.industry;
+  if (!d || !d.available) return;
+  const h = String(state.indHorizon);
+  const pts = (d.universe || [])
+    .map((name) => {
+      const cell = ((d.by_industry || {})[name] || {})[h] || {};
+      const hi = cell.high;
+      return hi && hi.avg_return != null
+        ? { name, v: Number(hi.avg_return) * 100, n: hi.samples }
+        : null;
+    })
+    .filter(Boolean)
+    .sort((a, b) => b.v - a.v);
+
+  if (!pts.length) {
+    if (state.indChart) { state.indChart.dispose(); state.indChart = null; }
+    el.innerHTML = `<div class="empty">${esc(t("indNoHighData"))}</div>`;
+    return;
+  }
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  if (!state.indChart) state.indChart = echarts.init(el);
+
+  state.indChart.setOption({
+    animationDuration: 480,
+    textStyle: { fontFamily: "inherit" },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "shadow" },
+      backgroundColor: "rgba(255,255,255,.97)",
+      borderColor: C.border, borderWidth: 1, padding: [9, 12],
+      textStyle: { color: C.text, fontSize: 12 },
+      formatter: (ps) => {
+        const p = ps[0];
+        const n = pts[p.dataIndex].n;
+        return `${esc(p.name)}<br/>${esc(t("btThAvg"))}：<b>${
+          p.value > 0 ? "+" : ""}${Number(p.value).toFixed(2)}%</b><br/>${
+          esc(t("btThSamples"))}：${n.toLocaleString()}`;
+      },
+    },
+    grid: { left: 96, right: 40, top: 16, bottom: 34 },
+    xAxis: {
+      type: "value",
+      splitLine: { lineStyle: { color: C.grid } },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { fontSize: 10, color: C.axis, formatter: (v) => `${v.toFixed(0)}%` },
+    },
+    yAxis: {
+      type: "category", inverse: true,
+      data: pts.map((p) => I18N.industry(p.name) || p.name),
+      axisLine: { lineStyle: { color: C.border } },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 11, color: C.text2 },
+    },
+    series: [{
+      type: "bar", barMaxWidth: 16,
+      data: pts.map((p) => ({
+        value: p.v,
+        itemStyle: { color: p.v >= 0 ? IND_BAR_POS : IND_BAR_NEG, borderRadius: [0, 3, 3, 0] },
+      })),
+      label: {
+        show: true, position: "right", fontSize: 10, color: C.muted,
+        formatter: (p) => `${p.value > 0 ? "+" : ""}${Number(p.value).toFixed(2)}%`,
+      },
+    }],
+  }, true);
+  state.indChart.resize();
+}
+
+function renderIndustryRank() {
+  const d = state.industry;
+  if (!d || !d.available) return;
+  const card = (title, rows, cls) => {
+    if (!rows || !rows.length) return "";
+    return `<div class="rank-card">
+      <div class="rank-head ${cls}">${esc(title)}</div>
+      <table class="rank-tbl"><tbody>${rows.map((r) => `<tr>
+        <td class="rank-name">${esc(I18N.industry(r.industry) || r.industry)}</td>
+        <td class="num">${(r.samples || 0).toLocaleString()}</td>
+        <td class="num">${r.win_rate == null ? "—" : (Number(r.win_rate) * 100).toFixed(1) + "%"}</td>
+        <td class="num ${pctCls(r.avg_return)}">${btPct(r.avg_return)}</td>
+        <td class="num">${r.max_drawdown == null ? "—" : (Number(r.max_drawdown) * 100).toFixed(1) + "%"}</td>
+      </tr>`).join("")}</tbody></table>
+    </div>`;
+  };
+  const head = `<table class="rank-tbl rank-tbl-head"><tbody><tr>
+    <td class="rank-name">${esc(t("indRankIndustry"))}</td>
+    <td class="num">${esc(t("btThSamples"))}</td>
+    <td class="num">${esc(t("btThWin"))}</td>
+    <td class="num">${esc(t("btThAvg"))}</td>
+    <td class="num">${esc(t("btThMdd"))}</td></tr></tbody></table>`;
+  const body = card(t("indRankTop"), d.top, "up") + card(t("indRankBottom"), d.bottom, "down");
+  $("indRankPair").innerHTML = body
+    ? `<h3 class="sub-h3">${esc(t("indRankTitle", { h: d.rank_horizon || "--" }))}</h3>`
+      + `<div class="rank-grid"><div class="rank-col">${head}${card(t("indRankTop"), d.top, "up")}</div>`
+      + `<div class="rank-col">${head}${card(t("indRankBottom"), d.bottom, "down")}</div></div>`
+    : "";
+}
+
+/* ---------------- 统计显著性（t 检验） ---------------- */
+function renderSignificance() {
+  const d = state.significance;
+  const ok = d && d.available;
+  $("sigEmpty").hidden = !!ok;
+  const body = $("sigBody");
+  if (!ok) {
+    body.innerHTML = "";
+    $("sigFoot").textContent = (d && d.reason) ? d.reason : t("sigEmpty");
+    return;
+  }
+  body.innerHTML = (d.tests || []).map((x) => `<tr>
+    <td>${esc(String(x.horizon))} ${esc(t("btUnitDays"))}</td>
+    <td class="num ${pctCls(x.mean1)}">${btPct(x.mean1)}</td>
+    <td class="num ${pctCls(x.mean2)}">${btPct(x.mean2)}</td>
+    <td class="num ${pctCls(x.mean_diff)}"><b>${btPct(x.mean_diff)}</b></td>
+    <td class="num">${fmt(x.t, 2)}</td>
+    <td class="num">${esc(x.p_text || fmt(x.p_value, 4))}</td>
+    <td class="num">[${btPct(x.ci_low)}, ${btPct(x.ci_high)}]</td>
+  </tr>`).join("");
+  const anysig = (d.tests || []).some((x) => x.significant);
+  $("sigFoot").textContent = t("sigFoot", {
+    alpha: d.alpha,
+    verdict: anysig ? t("sigFootYes") : t("sigFootNo"),
+  });
+}
+
+/* ---------------- 分年度稳健性 ---------------- */
+function renderRobustness() {
+  const d = state.significance;
+  const rob = d && d.robustness;
+  const ok = !!(rob && rob.available);
+  $("robEmpty").hidden = !!ok;
+  const body = $("robBody");
+  if (!ok) {
+    body.innerHTML = "";
+    $("robFoot").textContent = "";
+    return;
+  }
+  const years = rob.years || [];
+  const rows = [];
+  years.forEach((y, yi) => {
+    const list = (rob.by_year || {})[y] || [];
+    list.forEach((r, ri) => {
+      const cells = [
+        `<td>${esc(y)}</td>`,
+        `<td class="num">${esc(String(r.horizon))} ${esc(t("btUnitDays"))}</td>`,
+        `<td class="num">${(r.n_high || 0).toLocaleString()}</td>`,
+        `<td class="num ${pctCls(r.ret_high)}">${btPct(r.ret_high)}</td>`,
+        `<td class="num ${pctCls(r.ret_low)}">${btPct(r.ret_low)}</td>`,
+        `<td class="num ${pctCls(r.ret_diff)}"><b>${btPct(r.ret_diff)}</b></td>`,
+        `<td class="num ${pctCls(r.win_diff)}">${btPct(r.win_diff)}</td>`,
+        `<td class="num">${r.enough
+            ? (r.consistent ? `<span class="tag-ok">${esc(t("robConsistent"))}</span>`
+                            : `<span class="tag-bad">${esc(t("robInconsistent"))}</span>`)
+            : `<span class="tag-mute">${esc(t("robNotEnough"))}</span>`}</td>`,
+        `<td class="num">${(r.n_high || 0) + (r.n_low || 0) < (rob.min_samples || 0)
+            ? "—" : `<span class="tag-ok">✓</span>`}</td>`,
+      ];
+      rows.push(`<tr>${cells.join("")}</tr>`);
+    });
+  });
+  body.innerHTML = rows.join("");
+
+  const per = rob.per_horizon || {};
+  const parts = Object.keys(per).sort((a, b) => Number(a) - Number(b)).map((h) => {
+    const x = per[h] || {};
+    return `${h} ${t("btUnitDays")} ${x.consistent_years}/${x.valid_years}`;
+  });
+  $("robFoot").textContent = t("robFoot", {
+    min: rob.min_samples || 0,
+    detail: parts.join("　·　") || "—",
+  });
+}
+
+/* ---------------- 参数敏感性 ---------------- */
+function renderSensitivity() {
+  const d = state.sensitivity;
+  const ok = d && d.available;
+  $("sensEmpty").hidden = !!ok;
+  const body = $("sensBody");
+  if (!ok) {
+    body.innerHTML = "";
+    $("sensFoot").textContent = (d && d.reason) ? d.reason : t("sensEmpty");
+    return;
+  }
+  const h = (d.horizons || []).includes(state.btHorizon) ? state.btHorizon
+    : (d.horizons || [])[(d.horizons || []).length - 1];
+  const rows = [];
+  for (const g of d.groups || []) {
+    const variants = g.variants || [];
+    const span = variants.length + 1;
+    // 基准行
+    const baseStat = ((d.base_stats || {})[String(h)] || {}).high || {};
+    const drawRow = (first, label, stat, deltaPct, dirOk, stableCell) => {
+      const cells = [];
+      if (first) cells.push(
+        `<td rowspan="${span}" class="sens-param"><b>${esc(g.label)}</b><br>`
+        + `<span class="sens-base">${esc(t("sensBaseLabel"))} ${esc(g.base_label || "")}</span></td>`);
+      cells.push(
+        `<td>${esc(label)}</td>`,
+        `<td class="num">${stat.win_rate == null ? "—" : (Number(stat.win_rate) * 100).toFixed(1) + "%"}</td>`,
+        `<td class="num ${pctCls(stat.avg_return)}">${btPct(stat.avg_return)}</td>`,
+        `<td class="num ${deltaPct == null ? "" : pctCls(deltaPct)}">${
+          deltaPct == null ? "—" : `${deltaPct > 0 ? "+" : ""}${(deltaPct * 100).toFixed(3)} pp`}</td>`,
+        `<td class="num">${dirOk == null ? "—" : (dirOk
+          ? `<span class="tag-ok">${esc(t("sensDirKept"))}</span>`
+          : `<span class="tag-bad">${esc(t("sensDirLost"))}</span>`)}</td>`,
+        `<td class="num">${stableCell}</td>`,
+      );
+      rows.push(`<tr>${cells.join("")}</tr>`);
+    };
+    drawRow(true, t("sensBaseRow"), baseStat, null, null,
+      `<span class="tag-mute">${esc(t("sensBaseTag"))}</span>`);
+    for (const v of variants) {
+      const st = ((v.stats || {})[String(h)] || {}).high || {};
+      const delta = v.delta && v.delta[String(h)] && v.delta[String(h)].high
+        ? v.delta[String(h)].high.avg_return : null;
+      const dirOk = v.direction_kept ? v.direction_kept[String(h)] : null;
+      const stable = Math.abs(delta || 0) * 100 <= (d.stable_threshold_pp || 0);
+      drawRow(false, v.label, st, delta, dirOk,
+        stable ? `<span class="tag-ok">${esc(t("sensStable"))}</span>`
+               : `<span class="tag-bad">${esc(t("sensUnstable"))}</span>`);
+    }
+  }
+  body.innerHTML = rows.join("");
+
+  const c = d.conclusion || {};
+  $("sensFoot").textContent = t("sensFoot", {
+    h,
+    n: (d.groups || []).reduce((a, g) => a + (g.variants || []).length, 0),
+    dir: c.direction_all_kept ? t("sensFootDirOk") : t("sensFootDirNo"),
+    mag: c.magnitude_stable_all ? t("sensFootMagOk") : t("sensFootMagNo"),
+    worst: c.worst_group || "—",
+    pp: fmt(c.worst_delta_pp, 2),
+    threshold: d.stable_threshold_pp,
+  });
+}
+
 /* =========================================================================
    研究简报（v1.6.0）
    - 预览：新标签页打开 /api/report/html（自包含 HTML，可直接打印）
    - 导出：/api/report/export 返回 PDF，前端以 blob 方式下载并提示状态
    ========================================================================= */
 const REP_OUTLINE_KEYS = [
-  "repOutline1", "repOutline2", "repOutline3",
-  "repOutline4", "repOutline5", "repOutline6", "repOutline7",
+  "repOutline1", "repOutline2", "repOutline3", "repOutline4", "repOutline5",
+  "repOutline6", "repOutline7", "repOutline8", "repOutline9",
 ];
 
 function renderReportOutline() {
@@ -1287,6 +1770,16 @@ function renderReportMeta() {
 }
 
 function bindBacktestAndReport() {
+  // 对比口径切换：分档绩效（三组） / 共振对比（双共振 vs 单日线）
+  for (const b of document.querySelectorAll("#btMode .seg-opt")) {
+    b.addEventListener("click", () => {
+      state.btMode = b.dataset.mode || "tier";
+      for (const x of document.querySelectorAll("#btMode .seg-opt")) {
+        x.classList.toggle("is-on", x === b);
+      }
+      renderBacktest();
+    });
+  }
   for (const b of document.querySelectorAll("#btHorizon .seg-opt")) {
     b.addEventListener("click", () => {
       state.btHorizon = Number(b.dataset.h);
@@ -1294,6 +1787,7 @@ function bindBacktestAndReport() {
         x.classList.toggle("is-on", x === b);
       }
       renderBacktestTable();
+      if (state.btMode === "resonance") renderResonanceTable();
       drawBacktestChart();
     });
   }
@@ -1302,6 +1796,28 @@ function bindBacktestAndReport() {
     if (state.bt && state.bt.run_id) p.set("run_id", state.bt.run_id);
     window.open(`/api/backtest/trades.csv?${p}`, "_blank");
   });
+
+  // --- v1.7.0 分行业回测板块 ---
+  $("indSel").addEventListener("change", () => {
+    state.indIndustry = $("indSel").value || null;
+    renderIndustryTable();
+  });
+  for (const b of document.querySelectorAll("#indHorizon .seg-opt")) {
+    b.addEventListener("click", () => {
+      state.indHorizon = Number(b.dataset.h);
+      for (const x of document.querySelectorAll("#indHorizon .seg-opt")) {
+        x.classList.toggle("is-on", x === b);
+      }
+      renderIndustryTable();
+      drawIndustryBtChart();
+    });
+  }
+  $("btnIndCsv").addEventListener("click", () => {
+    const p = new URLSearchParams();
+    if (state.industry && state.industry.run_id) p.set("run_id", state.industry.run_id);
+    window.open(`/api/analysis/industry.csv?${p}`, "_blank");
+  });
+
   $("btnRepPreview").addEventListener("click", previewReport);
   $("btnRepPdf").addEventListener("click", exportReportPdf);
 }

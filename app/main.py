@@ -17,7 +17,7 @@ from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
 from app.config import API_HOST, API_PORT, PROJECT_ROOT
-from app.routers import backtest, market, news, pool, scan_api
+from app.routers import analysis, backtest, market, news, pool, scan_api
 from app.routers import report as report_api
 
 logging.basicConfig(
@@ -89,6 +89,7 @@ app.include_router(scan_api.router)
 app.include_router(market.router)
 app.include_router(news.router)
 app.include_router(backtest.router)
+app.include_router(analysis.router)
 app.include_router(report_api.router)
 
 # 静态资源（前端看板页面与本地打包的图表库）

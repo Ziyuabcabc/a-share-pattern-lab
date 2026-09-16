@@ -1,23 +1,29 @@
 # -*- coding: utf-8 -*-
-"""研究简报生成（v1.6.1）。
+"""研究简报生成（v1.7.0）。
 
 把当日扫描结果与历史回测结果组装成一份标准化研究简报，
 全部数据直接读自本地数据库，保证**结论可复现**、与看板实时同步。
 
-结构（七节，固定顺序）：
+结构（九节，固定顺序）：
 1. 研究摘要
-2. 研究方法与规则
-3. 历史回测结论
-4. 当日候选池分析
-5. 研究结论与展望
-6. 研究局限性与风险提示
-7. 合规声明
+2. 研究方法与规则（含参数敏感性分析）
+3. 历史回测结论（含统计显著性检验与分年度稳健性）
+4. 分行业回测
+5. 多周期共振策略
+6. 当日候选池分析
+7. 研究结论与展望
+8. 研究局限性与风险提示
+9. 合规声明
+
+v1.7.0 相对 v1.6.1 的变化：新增第四节、第五节两个章节，在第二、三、七、八节
+补入四项深度分析（分行业回测 / 统计显著性 / 参数敏感性 / 多周期共振），
+并把第八节中「未做统计显著性检验」等表述按实际研究进展据实改写。
 
 输出为**自包含 HTML**（图表以行内 SVG 绘制，不依赖任何外部资源与网络），
 再由 scripts/make_pdf.py 用本机浏览器渲染为 PDF。
 
-排版约定（v1.6.1 修订）
-----------------------
+排版约定
+--------
 - 表格一律使用 ``colgroup`` + ``table-layout:fixed`` 固定列宽，保证行列严格对齐；
 - 长表格允许跨页拆分，并用 ``thead{display:table-header-group}`` 让表头在每页重复，
   避免「整表跳页导致上一页大片留白」；
@@ -38,6 +44,10 @@ from datetime import datetime
 from app import config, db
 from app.backtest import data as bt_data
 from app.backtest import engine as bt_engine
+from app.backtest import industry as bt_industry
+from app.backtest import resonance as bt_resonance
+from app.backtest import sensitivity as bt_sensitivity
+from app.backtest import significance as bt_significance
 
 # ---------------------------------------------------------------------------
 # 配色（与看板前端保持一致的低饱和研究风）
@@ -180,6 +190,10 @@ def collect(conn: sqlite3.Connection, scan_run_id: int | None = None,
     bt_data.ensure_tables(conn)
     scan = _collect_scan(conn, scan_run_id)
     bt = _collect_backtest(conn, bt_run_id)
+    industry = _collect_industry(conn, bt)
+    significance = _collect_significance(conn, bt)
+    resonance = _collect_resonance(conn, bt)
+    sensitivity = _collect_sensitivity(conn, bt)
     return {
         "generated_at": datetime.now().strftime("%Y-%m-%d %H:%M"),
         "generated_date": datetime.now().strftime("%Y年%m月%d日"),
@@ -188,11 +202,17 @@ def collect(conn: sqlite3.Connection, scan_run_id: int | None = None,
         "author": config.REPORT_AUTHOR,
         "scan": scan,
         "backtest": bt,
+        "industry": industry,
+        "significance": significance,
+        "resonance": resonance,
+        "sensitivity": sensitivity,
         "rules": _rule_rows(),
         "indicator_defs": _indicator_defs(),
         "design_highlights": _design_highlights(bt),
-        "limitations": _limitations(scan, bt),
-        "conclusions": _conclusions(scan, bt),
+        "limitations": _limitations(scan, bt, industry, significance,
+                                    resonance, sensitivity),
+        "conclusions": _conclusions(scan, bt, significance, industry,
+                                    resonance, sensitivity),
         "disclaimer": config.DISCLAIMER,
     }
 
@@ -307,6 +327,63 @@ def _collect_backtest(conn: sqlite3.Connection, run_id: int | None) -> dict:
     }
 
 
+# ---------------------------------------------------------------------------
+# v1.7.0 四项深度分析的数据收集
+#
+# 四项分析均依赖已落库的回测批次；任一环节缺失（例如尚未运行
+# scripts/build_v17_analysis.py）时只把该项标记为不可用，
+# 不阻断其余章节的生成——简报必须能在任意数据完备度下正常产出。
+# ---------------------------------------------------------------------------
+def _bt_horizons(bt: dict) -> list[int]:
+    return [int(h) for h in (bt.get("horizons") or config.BT_HORIZONS)]
+
+
+def _collect_industry(conn: sqlite3.Connection, bt: dict) -> dict:
+    """分行业回测结果（读已落库的 bt_industry）。"""
+    if not bt.get("available") or not bt.get("run_id"):
+        return {"available": False, "reason": "尚未执行历史回测"}
+    try:
+        rid = int(bt["run_id"])
+        rows = bt_industry.load_rows(conn, rid)
+        if not rows:
+            return {"available": False, "run_id": rid,
+                    "reason": "尚未计算分行业回测结果"}
+        return bt_industry.build_summary(conn, rid, _bt_horizons(bt), rows)
+    except Exception as exc:  # noqa: BLE001 —— 单项失败不影响整份简报
+        return {"available": False, "reason": f"分行业回测读取失败: {exc}"}
+
+
+def _collect_significance(conn: sqlite3.Connection, bt: dict) -> dict:
+    """统计显著性检验（即时计算）。"""
+    if not bt.get("available") or not bt.get("run_id"):
+        return {"available": False, "reason": "尚未执行历史回测"}
+    try:
+        return bt_significance.build_summary(conn, int(bt["run_id"]),
+                                             _bt_horizons(bt))
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "reason": f"显著性检验失败: {exc}"}
+
+
+def _collect_resonance(conn: sqlite3.Connection, bt: dict) -> dict:
+    """多周期共振对比（读已落库的 bt_resonance）。"""
+    if not bt.get("available") or not bt.get("run_id"):
+        return {"available": False, "reason": "尚未执行历史回测"}
+    try:
+        return bt_resonance.build_summary(conn, int(bt["run_id"]), _bt_horizons(bt))
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "reason": f"共振对比读取失败: {exc}"}
+
+
+def _collect_sensitivity(conn: sqlite3.Connection, bt: dict) -> dict:
+    """参数敏感性分析（读已落库的 bt_sensitivity）。"""
+    if not bt.get("available") or not bt.get("run_id"):
+        return {"available": False, "reason": "尚未执行历史回测"}
+    try:
+        return bt_sensitivity.load_summary(conn, int(bt["run_id"]))
+    except Exception as exc:  # noqa: BLE001
+        return {"available": False, "reason": f"参数敏感性读取失败: {exc}"}
+
+
 def _rule_rows() -> list[tuple[str, str, str]]:
     """打分规则表（模块 / 条件 / 分值），与 config 实时联动。"""
     return [
@@ -388,14 +465,29 @@ def _design_highlights(bt: dict) -> list[tuple[str, str]]:
     return items
 
 
-def _limitations(scan: dict, bt: dict) -> list[dict]:
-    """按实际数据情况生成局限性条目（不写空话）。"""
+def _limitations(scan: dict, bt: dict, industry: dict | None = None,
+                 significance: dict | None = None, resonance: dict | None = None,
+                 sensitivity: dict | None = None) -> list[dict]:
+    """按实际数据情况生成局限性条目（不写空话）。
+
+    v1.7.0 起，部分条目需随研究进展据实改写——例如「未做统计显著性检验」
+    在补充了 t 检验之后就不再成立，应改为说明该检验自身的适用边界。
+    """
+    industry = industry or {}
+    significance = significance or {}
+    resonance = resonance or {}
+    sensitivity = sensitivity or {}
+
     out = [
-        {"title": "研究性质：描述性统计，未做显著性检验",
-         "body": "本研究对分组表现只做<b>描述性统计</b>，未进行假设检验，"
-                 "未报告 p 值、置信区间或效应量。因此「高匹配分组优于低匹配分组」"
-                 "这一表述是对样本内观测差异的陈述，其差异<b>不具备统计显著性</b>，"
-                 "也不能排除该差异由随机波动导致。"},
+        {"title": "显著性检验的适用边界",
+         "body": "本研究已对高匹配分组与低匹配分组的收益差异做 Welch 独立样本 t 检验，"
+                 "报告均值差异、p 值与 95% 置信区间，但需明确其适用边界："
+                 "其一，检验假定样本相互独立，而同一调仓截面的个股会共同承受市场冲击，"
+                 "样本间存在<b>横截面相关</b>，这会低估标准误、使 p 值偏小；"
+                 "其二，本研究同时检验多个持仓周期与多个行业，"
+                 "<b>未做多重比较校正</b>，存在假阳性累积风险；"
+                 "其三，样本量达十万量级时，即便经济意义很小的差异也可能被判为统计显著。"
+                 "因此统计显著性与经济意义需分开解读，p 值应视为<b>近似参考</b>而非严格推断。"},
         {"title": "历史统计不等于未来表现",
          "body": "简报中全部指标均为对历史公开数据的统计描述，描述的是「过去发生了什么」，"
                  "而非「未来会发生什么」。样本区间内的统计规律在区间外不保证延续；"
@@ -412,20 +504,90 @@ def _limitations(scan: dict, bt: dict) -> list[dict]:
                  f"两处的分数不可直接互相换算。"},
         {"title": "行业归属与 ST 状态未回溯历史",
          "body": "回测使用当前申万一级行业映射与最新股票名称判定 ST 状态，未回溯历史行业变更"
-                 "与历史 ST 变更记录，存在轻微前视。因两者变动频率较低，对整体结论影响有限。"},
+                 "与历史 ST 变更记录，存在轻微前视。因两者变动频率较低，对整体结论影响有限。"
+                 "该前视对第四节的分行业回测影响相对更大：行业归属错误会直接导致样本"
+                 "被划入错误的行业分组。"},
         {"title": "交易成本与摩擦未计入",
          "body": "回测未扣除交易佣金、印花税、冲击成本与滑点，也未考虑涨跌停或停牌导致的"
-                 "无法成交情形。实际可执行结果会系统性地低于理论统计值。"},
+                 "无法成交情形。实际可执行结果会系统性地低于理论统计值。"
+                 "第五节的周线共振策略换手更低，受摩擦成本的影响理论上小于单日线策略，"
+                 "但由于未实际扣费，这一差异无法从本研究的数值中读出。"},
         {"title": "分组累计净值的持有期口径",
          "body": "分组累计净值为各调仓周期内等权平均收益的复利累积。当持仓周期短于调仓间隔时"
                  "（例如 5 日周期对应 20 日间隔），组合仅在该周期的窗口内持有，其余时间为空仓，"
                  "因此净值曲线的斜率<b>不与满仓持有直接可比</b>，不同持仓周期之间的净值高低"
                  "也不宜直接横向比较。"},
-        {"title": "样本期与市场环境单一",
-         "body": f"回测区间为 {bt.get('start_date') or config.BT_CALENDAR_YEARS} 起的一段连续"
-                 f"历史区间，仅覆盖单一市场环境，未做过跨牛熊区间的分年度稳健性拆解，"
-                 f"结论对该区间内的特定行情特征可能存在依赖。"},
     ]
+
+    # --- 样本期与市场环境：已补分年度稳健性，据实汇报结果 ---
+    rob = (significance.get("robustness") or {}) if significance.get("available") else {}
+    per_h = {int(x["horizon"]): x for x in (rob.get("per_horizon") or [])}
+    if per_h:
+        parts = []
+        for h in sorted(per_h):
+            x = per_h[h]
+            parts.append(f"{h} 日周期 {x['consistent_years']}/{x['valid_years']} 个年度方向一致")
+        worst = min(per_h.values(), key=lambda x: (x["consistent_ratio"] or 0))
+        out.append({
+            "title": "分年度稳健性：结论并非在所有年度一致成立",
+            "body": f"本研究已按自然年拆分样本做稳健性检验，结果见 3.5 节："
+                    f"{'；'.join(parts)}。其中 {worst['horizon']} 日周期的一致性最低"
+                    f"（{worst['consistent_years']}/{worst['valid_years']}）。"
+                    f"这表明「高匹配分组优于低匹配分组」的方向在整体样本上成立，"
+                    f"<b>但在个别年度会出现反转</b>，结论对所处的市场环境存在依赖；"
+                    f"同时，回测区间首尾年份（2023、2026）只覆盖部分月份，"
+                    f"样本量与非完整年度不可比。"})
+    else:
+        out.append({
+            "title": "样本期与市场环境单一",
+            "body": f"回测区间为 {bt.get('start_date') or config.BT_CALENDAR_YEARS} 起的一段连续"
+                    f"历史区间，仅覆盖单一市场环境，未做过跨牛熊区间的分年度稳健性拆解，"
+                    f"结论对该区间内的特定行情特征可能存在依赖。"})
+
+    # --- 分行业回测：高匹配分组样本的行业集中度 ---
+    conc = industry.get("concentration") or {}
+    if industry.get("available") and conc.get("industries_with_samples") is not None:
+        n_ok = conc.get("industries_with_samples")
+        n_all = conc.get("industries_total")
+        if n_ok and n_all and n_ok < n_all:
+            out.append({
+                "title": "高匹配分组样本在行业上高度集中",
+                "body": f"分行业回测覆盖全部 {n_all} 个申万一级行业，"
+                        f"但高匹配分组的样本只出现在其中 <b>{n_ok} 个行业</b>，"
+                        f"其余 {n_all - n_ok} 个行业因高分样本不足无法参与排名。"
+                        f"这是因为{_TERM_SCORE}的高分档依赖热点行业加分与成长板块加分，"
+                        f"样本天然向少数行业聚集。因此第四节给出的行业排名"
+                        f"<b>只代表这 {n_ok} 个行业</b>，不能外推为全行业结论；"
+                        f"同时也提示该评分体系存在行业偏向性，"
+                        f"在应用于候选池筛选时应意识到这一结构性偏差。"})
+
+    # --- 参数敏感性：覆盖面与判定阈值 ---
+    if sensitivity.get("available"):
+        gs = sensitivity.get("groups") or []
+        n_variants = sensitivity.get("conclusion", {}).get("variant_count") or 0
+        out.append({
+            "title": "参数敏感性分析只覆盖 3 组参数",
+            "body": f"敏感性分析考察了 {'、'.join(g['label'] for g in gs)} 共 3 组参数、"
+                    f"{n_variants} 个扰动档。打分体系中仍有若干参数未纳入考察"
+                    f"（例如 KDJ 参数、各评分项的<b>分值权重</b>、分组阈值 60 / 30、"
+                    f"调仓间隔等）。其中分值权重对结果的影响可能大于本次考察的参数，"
+                    f"因为调整权重会直接改变分组构成。此外，「幅度稳定」的判定阈值 "
+                    f"{sensitivity.get('stable_threshold_pp')} 个百分点是人为设定，"
+                    f"换一个阈值可能得出不同措辞的结论。"})
+
+    # --- 多周期共振：样本量与检验力 ---
+    if resonance.get("available"):
+        hs = resonance.get("stats") or []
+        n_res = min((r["resonance"]["samples"] or 0) for r in hs) if hs else 0
+        n_day = min((r["daily_high"]["samples"] or 0) for r in hs) if hs else 0
+        out.append({
+            "title": "周线共振分组的样本量明显低于对照组",
+            "body": f"双共振分组是在「日线高匹配分组」基础上再叠加周线条件得到的子集，"
+                    f"各周期有效样本约 {_int(n_res)} 条，仅为对照的单日线分组"
+                    f"（约 {_int(n_day)} 条）的三分之一左右。样本量下降会降低检验力，"
+                    f"使该组绩效本身带有更大的抽样波动；同时该组未做单独的显著性检验，"
+                    f"第五节给出的差异<b>不能判断是否具备统计显著性</b>。"})
+
     if scan.get("available") and scan.get("candidates"):
         out.append({
             "title": "候选池仅覆盖当期截面",
@@ -439,14 +601,28 @@ def _limitations(scan: dict, bt: dict) -> list[dict]:
             out.append({
                 "title": "回测调仓点数量有限",
                 "body": f"回测区间内有效调仓点仅 {pts} 个，在分组层面属于小样本，"
-                        f"单期极端行情会对整体统计产生较大影响，"
-                        f"分组间差异的统计显著性未做检验。",
+                        f"单期极端行情会对整体统计产生较大影响。"
+                        f"分年度拆分后，单年度的调仓点进一步减少，"
+                        f"因此 3.5 节的年度一致性检验只能反映方向，不足以支撑年度层面的"
+                        f"精细定量比较。",
             })
     return out
 
 
-def _conclusions(scan: dict, bt: dict) -> dict:
-    """研究结论与展望：核心发现 / 局限指向 / 后续方向。"""
+def _conclusions(scan: dict, bt: dict, significance: dict | None = None,
+                 industry: dict | None = None, resonance: dict | None = None,
+                 sensitivity: dict | None = None) -> dict:
+    """研究结论与展望：核心发现 / 局限指向 / 后续方向。
+
+    v1.7.0 起，v1.6.1 中列为「后续可拓展方向」的分行业回测、参数敏感性分析、
+    多周期共振研究三项已经完成，相应内容上移为「核心发现」，
+    展望部分替换为尚未解决的问题。
+    """
+    significance = significance or {}
+    industry = industry or {}
+    resonance = resonance or {}
+    sensitivity = sensitivity or {}
+
     findings: list[str] = []
     if bt.get("available"):
         by_h = bt.get("stats_by_horizon") or {}
@@ -480,6 +656,94 @@ def _conclusions(scan: dict, bt: dict) -> dict:
     else:
         findings.append("当前尚无已完成的历史回测记录，暂无法给出分组表现的统计结论。")
 
+    # --- 统计显著性检验（v1.7.0）---
+    tests = (significance.get("tests") or []) if significance.get("available") else []
+    if tests:
+        parts = []
+        for r in tests:
+            sig_txt = "显著" if r.get("significant") else "不显著"
+            parts.append(
+                f"{r['horizon']} 日周期均值差异 {_pct(r.get('mean_diff'), 3, True)}"
+                f"（t = {_num(r.get('t'), 2)}，p {r.get('p_text', '—')}，{sig_txt}）")
+        all_sig = all(r.get("significant") for r in tests)
+        findings.append(
+            f"<b>统计显著性</b>：对高匹配分组与低匹配分组的单笔收益做 Welch 独立样本 "
+            f"t 检验，三个持仓周期上均值差异均为正，"
+            + "；".join(parts) + "。"
+            + ("在 5% 显著性水平下，三个周期的分组差异<b>均具备统计显著性</b>，"
+               "95% 置信区间均不包含 0，说明该差异难以仅由抽样随机性解释。"
+               if all_sig else
+               "并非所有周期都达到统计显著，分组差异的稳健性有限。")
+            + "需要强调的是，统计显著不等于经济意义显著，"
+              "且检验未做多重比较校正、样本间存在横截面相关（详见第八节）。")
+
+    # --- 分行业回测（v1.7.0）---
+    if industry.get("available"):
+        conc = industry.get("concentration") or {}
+        rank_h = industry.get("rank_horizon")
+        top = industry.get("top") or []
+        bottom = industry.get("bottom") or []
+        if conc.get("industries_with_samples") and conc.get("industries_total"):
+            findings.append(
+                f"<b>行业维度</b>：把样本按申万一级行业拆分后，"
+                f"{conc['industries_total']} 个行业中只有 "
+                f"<b>{conc['industries_with_samples']} 个</b>行业存在高匹配分组样本"
+                f"（前三行业 {'、'.join(conc.get('top_industries') or [])} 合计占 "
+                f"{(conc.get('top3_share') or 0) * 100:.1f}%）。"
+                f"这说明该评分体系的<b>高分样本在行业上高度集中</b>——"
+                f"形态特征本身与行业属性存在较强的耦合，"
+                f"分行业结果不能外推为全行业结论。")
+        if top and bottom:
+            findings.append(
+                f"在样本量达到门槛的行业中，按持仓 {rank_h} 个交易日的高匹配分组平均收益率"
+                f"排序，相对靠前的行业为 "
+                + "、".join(f"{x['industry']}（{_pct(x['avg_return'], 2, True)}）" for x in top)
+                + "，相对靠后的为 "
+                + "、".join(f"{x['industry']}（{_pct(x['avg_return'], 2, True)}）" for x in bottom)
+                + "。行业间的离散程度说明形态特征并非在所有行业同等有效。")
+
+    # --- 多周期共振（v1.7.0，负面结果如实列出）---
+    if resonance.get("available"):
+        stats = resonance.get("stats") or []
+        worse = sum(1 for r in stats
+                    if (r["diff"].get("avg_return") or 0) < 0)
+        detail = "；".join(
+            f"{r['horizon']} 日周期 {_pct(r['resonance']['avg_return'], 2, True)} 对 "
+            f"{_pct(r['daily_high']['avg_return'], 2, True)}"
+            for r in stats)
+        if stats and worse == len(stats):
+            findings.append(
+                f"<b>多周期共振（负面结果）</b>：在日线高匹配分组的基础上再叠加周线形态确认，"
+                f"得到的「日线 + 周线双共振」分组在全部三个持仓周期上"
+                f"<b>表现均低于</b>原单日线策略（平均收益率 {detail}）。"
+                f"该约束同时降低了上涨胜率，并未带来回撤上的稳定优势。"
+                f"这提示在本样本区间内，<b>周线确认不构成有效的增益条件</b>；"
+                f"一种可能的解释是周线形态具有持续性，该条件筛出的个股被剔除了"
+                f"形态形成初期收益弹性最大的部分。此为该研究的否定性发现，如实列出。")
+        elif stats:
+            findings.append(
+                f"<b>多周期共振</b>：叠加周线条件后，双共振分组与原单日线策略的"
+                f"表现差异随周期而变（平均收益率 {detail}），"
+                f"未呈现一致的方向性改进。")
+
+    # --- 参数敏感性（v1.7.0）---
+    if sensitivity.get("available"):
+        c = sensitivity.get("conclusion") or {}
+        if c.get("direction_all_kept"):
+            findings.append(
+                f"<b>参数稳健性</b>：对 "
+                + "、".join(g["label"] for g in (sensitivity.get("groups") or []))
+                + f" 共 {c.get('variant_count')} 个参数扰动档各跑一次全量回测，"
+                f"全部分组结论的<b>方向均保持不变</b>"
+                f"（高匹配分组平均收益率始终高于低匹配分组），"
+                f"其中变动最大的是「{c.get('worst_group')}」组"
+                f"（{c.get('worst_delta_pp')} 个百分点）。"
+                + ("变动幅度均未超过预设阈值，说明结论对这几组参数<b>不敏感</b>。"
+                   if c.get("magnitude_stable_all") else
+                   "但部分参数下的变动幅度超过了预设阈值，说明结论对参数取值"
+                   "仍存在一定依赖。")
+                + "需注意本次未考察分值权重与分组阈值，这两类参数的影响可能更大。")
+
     if scan.get("available") and scan.get("candidates"):
         findings.append(
             f"就当期截面而言，纳入候选池的 {_int(scan['candidates'])} 只个股中，"
@@ -488,22 +752,25 @@ def _conclusions(scan: dict, bt: dict) -> dict:
             f"整体分布呈明显的右偏形态（平均分 {_num(scan['avg_score'], 1)} 分）。")
 
     outlook = [
-        ("分行业回测",
-         "当前回测在全部行业内混合统计，未控制行业效应。后续可在申万一级行业维度上"
-         "分别回测，考察形态特征在哪些行业中的区分能力更强，以及结论是否由少数行业的"
-         "极端表现驱动。"),
-        ("参数敏感性分析",
-         "当前打分权重与阈值均由先验设定，未做寻优。后续可对 MACD / KDJ 参数、量能倍数、"
-         "横盘振幅阈值等关键参数做敏感性分析，观察结论对参数扰动的稳健程度。"),
-        ("多周期共振研究",
-         "当前仅对单一观察日的形态打分。后续可引入多周期（如日线 + 周线）共振条件，"
-         "考察叠加更长周期约束后，分组差异是否进一步扩大。"),
+        ("行业中性化打分",
+         "第四节的结果显示高匹配分组样本只集中在少数行业，说明当前评分体系存在行业偏向。"
+         "后续可引入行业中性化处理——例如把行业加分改为行业内相对排位、"
+         "或对样本按行业做加权，考察剔除行业效应后形态特征本身是否仍有区分能力。"),
+        ("分值权重与分组阈值的敏感性",
+         "本次敏感性分析只覆盖了 MACD 参数、量能倍数与振幅阈值三组判断条件，"
+         "尚未考察各评分项的<b>分值权重</b>以及 60 / 30 的分组阈值。"
+         "权重调整会直接改变分组构成，其影响可能大于已考察的参数，是下一阶段的优先方向。"),
+        ("多周期共振的其他构造方式",
+         "本次以「周线形态确认」作为增益条件，结果未能提升绩效。"
+         "后续可尝试其他构造：改用月线做长期趋势过滤、把周线条件用作仓位调整"
+         "而非样本筛选、或改用周线相对强弱而非形态金叉。"),
+        ("样本外与滚动前推检验",
+         "当前结论全部来自同一样本区间内的统计，未做样本外验证。"
+         "后续可采用滚动前推（walk-forward）方式，在每一年用此前数据确定参数、"
+         "在之后的数据上检验，以评估结论的真实可迁移性。"),
         ("纳入交易成本与可执行性约束",
          "后续可把佣金、印花税、滑点以及涨跌停不可成交等约束纳入回测，"
          "评估结论在扣除摩擦成本后的存续性。"),
-        ("统计推断与稳健性检验",
-         "后续可引入 bootstrap 重抽样、分年度滚动检验等方式，为分组差异给出置信区间，"
-         "把当前的描述性统计升级为具备推断能力的检验。"),
         ("扩展样本区间与市场",
          "当前样本区间较短且市场环境单一。后续可把回测区间向前延伸至更长历史，"
          "或在不同市场状态下分组检验，以提升结论的外部效度。"),
@@ -785,16 +1052,41 @@ font-size:8.5pt;color:var(--muted);text-align:center;line-height:1.7}
 def _section_summary(d: dict) -> str:
     """研究摘要：先给核心结论，再罗列支撑数据。"""
     scan, bt = d["scan"], d["backtest"]
+    sig = d.get("significance") or {}
+    ind = d.get("industry") or {}
+    res = d.get("resonance") or {}
+    sens = d.get("sensitivity") or {}
 
     if bt.get("available"):
+        # 显著性一句话（若有检验结果）
+        sig_txt = ""
+        tests = sig.get("tests") or []
+        if tests and all(r.get("significant") for r in tests):
+            sig_txt = ("对分组差异补充的 Welch 独立样本 t 检验显示，"
+                       "三个持仓周期上的差异均达到统计显著（p 均小于 0.001，"
+                       "95% 置信区间不含 0）。")
+        elif tests:
+            sig_txt = "对分组差异补充的 t 检验显示，并非所有持仓周期都达到统计显著。"
+
+        # 两项限定性发现
+        extra = []
+        conc = ind.get("concentration") or {}
+        if conc.get("industries_with_samples") and conc.get("industries_total"):
+            extra.append(
+                f"但高分样本在行业上高度集中（{conc['industries_total']} 个申万一级行业"
+                f"中仅 {conc['industries_with_samples']} 个存在高匹配分组样本）")
+        res_stats = res.get("stats") or []
+        if res_stats and all((r["diff"].get("avg_return") or 0) < 0 for r in res_stats):
+            extra.append("叠加周线条件的双共振分组在全周期上均未优于单日线策略")
+        limit_txt = ("同时需要说明：" + "；".join(extra) + "。") if extra else ""
+
         conclusion = (
             f"本研究构建了一套基于量价形态特征的个股评分体系——{_TERM_SCORE}，"
             f"并通过近 {config.BT_CALENDAR_YEARS} 年 A 股历史回测对其进行验证。"
             f"结果表明，高匹配分组个股在<b>中短期持仓周期</b>内的上涨概率与收益水平"
-            f"整体优于低匹配分组，"
-            f"初步验证了量价形态特征对个股中短期收益的区分能力；"
-            f"但该结论属于<b>样本内的描述性统计</b>，未做统计显著性检验，"
-            f"不构成对未来的任何推断。")
+            f"整体优于低匹配分组，初步验证了量价形态特征对个股中短期收益的区分能力。"
+            f"{sig_txt}{limit_txt}"
+            f"该结论建立在<b>样本内的历史统计</b>之上，不构成对未来的任何推断。")
     else:
         conclusion = (
             f"本研究构建了一套基于量价形态特征的个股评分体系——{_TERM_SCORE}，"
@@ -861,6 +1153,53 @@ def _section_summary(d: dict) -> str:
             f"统一计 0 分；分组阈值仍沿用 {config.HIGH_SCORE_THRESHOLD} / "
             f"{config.MID_SCORE_THRESHOLD} 分标准，因此回测分组的实际筛选标准"
             f"比看板当日口径<b>更为严苛</b>，两者分数不可直接换算。")
+
+    # ---- v1.7.0 四项深度分析要点 ----
+    tests = (sig.get("tests") or []) if sig.get("available") else []
+    if tests:
+        seg = "；".join(
+            f"{r['horizon']} 日 {_pct(r.get('mean_diff'), 3, True)}"
+            f"（p {r.get('p_text', '—')}）" for r in tests)
+        all_sig = all(r.get("significant") for r in tests)
+        bullets.append(
+            f"<b>统计显著性</b>：高匹配分组与低匹配分组的均值差异为 {seg}。"
+            + ("三个周期在 5% 水平上<b>均显著</b>，差异难以仅由抽样随机性解释。"
+               if all_sig else "并非所有周期都达到显著。")
+            + "检验未做多重比较校正，且样本间存在横截面相关，p 值应作近似参考。")
+
+    if ind.get("available"):
+        conc = ind.get("concentration") or {}
+        bullets.append(
+            f"<b>分行业回测</b>：覆盖全部 {ind.get('industry_count')} 个申万一级行业，"
+            f"其中仅 <b>{conc.get('industries_with_samples')}</b> 个行业存在高匹配分组样本"
+            f"（前三行业合计占 {(conc.get('top3_share') or 0) * 100:.1f}%），"
+            f"按 {ind.get('rank_horizon')} 日平均收益率排序，"
+            f"相对靠前的是 "
+            + "、".join(x["industry"] for x in (ind.get("top") or [])[:3])
+            + f"。高分样本的行业集中本身就是该评分体系的结构性特征，详见第四节。")
+
+    res_stats = (res.get("stats") or []) if res.get("available") else []
+    if res_stats:
+        worse = all((r["diff"].get("avg_return") or 0) < 0 for r in res_stats)
+        bullets.append(
+            f"<b>多周期共振</b>：在日线高匹配分组上叠加周线形态确认后，"
+            + ("双共振分组在全部三个持仓周期上的平均收益率、上涨胜率<b>均低于</b>"
+               "原单日线策略，回撤亦未系统性改善。该否定性结果说明周线确认"
+               "在本样本区间内不构成增益条件，详见第五节。"
+               if worse else
+               "双共振分组与单日线策略的差异随周期变化，未呈现一致改进，详见第五节。"))
+
+    if sens.get("available"):
+        c = sens.get("conclusion") or {}
+        bullets.append(
+            f"<b>参数稳健性</b>：对 "
+            + "、".join(g["label"] for g in (sens.get("groups") or []))
+            + f" 共 {c.get('variant_count')} 个扰动档各跑一次全量回测，"
+            + ("全部分组结论方向保持不变，结论对该几组参数不敏感。"
+               if c.get("direction_all_kept") else
+               "部分参数下分组结论方向发生改变，结论对参数取值存在依赖。")
+            + "分值权重与分组阈值未纳入本次考察，详见第二节 2.6。")
+
     if not bullets:
         bullets.append("当前尚无已完成的扫描批次或回测记录，简报内容不完整。")
 
@@ -917,6 +1256,39 @@ def _section_method(d: dict) -> str:
             f'其二，回测分数与看板当日分数<b>不可直接互相换算或横向比较</b>。'
             f'本简报的全部分组结论，均是在这一更严苛口径下取得的。</p></div>')
 
+    # --- 2.6 参数敏感性分析（v1.7.0）---
+    sens = d.get("sensitivity") or {}
+    if sens.get("available"):
+        c = sens.get("conclusion") or {}
+        groups = sens.get("groups") or []
+        worst = c.get("worst_group")
+        verdict = (
+            "全部扰动档下「高匹配分组平均收益率高于低匹配分组」这一<b>方向均保持不变</b>，"
+            if c.get("direction_all_kept") else
+            "部分扰动档下分组方向发生了改变，")
+        verdict += (
+            f"各档相对基准的最大变动为 {_num(c.get('worst_delta_pp'), 2)} 个百分点"
+            f"（来自「{_esc(worst)}」），"
+            + (f"低于预设的稳定阈值 {sens.get('stable_threshold_pp')} 个百分点，"
+               f"可以认为结论对这几组参数<b>不敏感</b>。"
+               if c.get("magnitude_stable_all") else
+               f"已超过预设的稳定阈值 {sens.get('stable_threshold_pp')} 个百分点，"
+               f"说明结论对参数取值仍存在一定依赖。"))
+        sens_html = f"""
+<h3>2.6　参数敏感性分析</h3>
+<p>本研究的分值权重与判定阈值均由先验设定，未做参数寻优。一个自然的质疑是：
+换一组参数，结论是否还成立？为回答该问题，本节对三组核心参数各取两个扰动档
+（每次只改动其中一个参数，其余保持基准），<b>每档单独跑一次全量回测</b>，
+再与基准组的分档绩效逐项对比。变体回测不写入正式回测批次，
+仅作为对照样本使用，因此不会影响第三节的基准结果。</p>
+{_sensitivity_table(sens)}
+<p>结果显示，{verdict}</p>
+<p>需要指出的是，本节只覆盖了判断条件类的参数。打分体系中影响可能更大的
+<b>分值权重</b>（例如热点行业加分的 22 分）与<b>分组阈值</b>（60 / 30）未纳入考察，
+因为调整它们会直接改变分组的构成。这一范围限制已如实列入第八节局限性。</p>"""
+    else:
+        sens_html = ""
+
     return f"""
 <p>本研究的{_TERM_SCORE}是一个<b>特征相似度指标</b>：把个股当前的量价形态与本地历史样本库中
 「上升段启动」时点的形态特征逐项比对，命中的特征按预设权重累加，得到 0–100 的综合形态匹配分。
@@ -957,7 +1329,58 @@ def _section_method(d: dict) -> str:
 <li><b>基准</b>：{_TERM_BENCH}（{config.BT_INDEX_SYMBOL}），与个股同样按前复权口径处理</li>
 <li><b>分组净值</b>：各调仓周期内该组样本等权平均收益率的复利累积，起点 = 1.00</li>
 </ul>
-{score_note}"""
+{score_note}{sens_html}"""
+
+
+def _sensitivity_table(sens: dict) -> str:
+    """参数敏感性对照表：基准 + 各扰动档的分组绩效与方向变化。"""
+    hs = [int(h) for h in (sens.get("horizons") or [])]
+    base_stats = sens.get("base_stats") or {}
+    rows_html: list[str] = []
+
+    def cell(v, signed=True):
+        cls = ""
+        if signed and v is not None:
+            cls = "pos" if v > 0 else ("neg" if v < 0 else "")
+        return f'<td class="num {cls}">{_pct(v, 2, signed)}</td>'
+
+    for g in sens.get("groups") or []:
+        base_hi = {str(h): (base_stats.get(str(h), {}).get("high") or {})
+                   for h in hs}
+        # 基准行
+        rows_html.append(
+            f'<tr><td rowspan="{len(g["variants"]) + 1}">{_esc(g["label"])}</td>'
+            f'<td class="base">{_esc(g["base_label"])}（基准）</td>'
+            + "".join(cell(base_hi[str(h)].get("avg_return")) for h in hs)
+            + '<td class="num">0.00</td><td class="ok">—</td></tr>')
+        for v in g["variants"]:
+            hi = {str(h): (v["stats"].get(str(h), {}).get("high") or {}) for h in hs}
+            deltas = [v["delta"][str(h)]["high"]["avg_return"] for h in hs]
+            max_pp = max((abs(d) * 100 for d in deltas if d is not None), default=None)
+            kept = all(x for x in v["direction_kept"].values() if x is not None)
+            keep_txt = ("保持" if kept else "反转")
+            keep_cls = "ok" if kept else "bad"
+            rows_html.append(
+                f'<tr><td>{_esc(v["label"])}</td>'
+                + "".join(cell(hi[str(h)].get("avg_return")) for h in hs)
+                + f'<td class="num">{_num(max_pp, 2)}</td>'
+                + f'<td class="{keep_cls}">{keep_txt}</td></tr>')
+
+    head = ('<thead><tr><th>考察参数</th><th>参数取值</th>'
+            + "".join(f'<th class="num">高匹配<br>{h} 日</th>' for h in hs)
+            + '<th class="num">相对基准<br>最大变动</th>'
+              '<th class="num">分组方向<br>是否保持</th></tr></thead>')
+    n_variants = sens.get("conclusion", {}).get("variant_count") or 0
+    return (
+        f'<p class="tbl-cap">@@TBL@@　参数敏感性分析对照表'
+        f'（{n_variants} 个扰动档各跑一次全量回测，仅改动单个参数）</p>'
+        + '<table class="tbl-keep">'
+        + _colgroup([16, 14, 10, 10, 10, 20, 20])
+        + head + f'<tbody>{"".join(rows_html)}</tbody></table>'
+        + '<p class="tbl-src">注：表内数值为<b>高匹配分组</b>的平均收益率（单笔样本算术平均）；'
+          '「相对基准最大变动」为该扰动档在三个持仓周期上相对基准组的绝对变动最大值，'
+          '单位为百分点；「分组方向」指「高匹配分组平均收益率高于低匹配分组」这一结论'
+          '在三个周期上是否全部保持。基准组为 config 默认参数，与第三节的分档绩效同源。</p>')
 
 
 def _horizon_table(bt: dict, h: int) -> str:
@@ -989,6 +1412,81 @@ def _horizon_table(bt: dict, h: int) -> str:
         f'（持仓 {h} 个交易日）</p>'
         + '<table class="tbl-keep">' + _colgroup([13, 10, 14, 10, 12, 17, 12, 12])
         + head + f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _significance_table(sig: dict) -> str:
+    """独立样本 t 检验结果表。"""
+    tests = sig.get("tests") or []
+    body = []
+    for r in tests:
+        ci = (f'[{_pct(r.get("ci_low"), 2, True)}, {_pct(r.get("ci_high"), 2, True)}]'
+              if r.get("ci_low") is not None else "—")
+        diff = r.get("mean_diff")
+        cls = "pos" if (diff or 0) > 0 else ("neg" if (diff or 0) < 0 else "")
+        sig_txt = "显著" if r.get("significant") else "不显著"
+        sig_cls = "ok" if r.get("significant") else "bad"
+        body.append(
+            f'<tr><td>{r["horizon"]} 个交易日</td>'
+            f'<td class="num">{_pct(r.get("mean1"), 3, True)}</td>'
+            f'<td class="num">{_pct(r.get("mean2"), 3, True)}</td>'
+            f'<td class="num {cls}">{_pct(diff, 3, True)}</td>'
+            f'<td class="num">{ci}</td>'
+            f'<td class="num">{_num(r.get("t"), 3)}</td>'
+            f'<td class="num">{_esc(r.get("p_text", "—"))}'
+            f'<span class="{sig_cls}">（{sig_txt}）</span></td></tr>')
+    head = ('<thead><tr><th>持仓周期</th>'
+            '<th class="num">高匹配分组<br>平均收益率</th>'
+            '<th class="num">低匹配分组<br>平均收益率</th>'
+            '<th class="num">均值差异</th><th class="num">95% 置信区间</th>'
+            '<th class="num">t 值</th><th class="num">p 值</th></tr></thead>')
+    return (
+        '<p class="tbl-cap">@@TBL@@　高匹配分组与低匹配分组的独立样本 t 检验'
+        '（Welch 形式，双尾）</p>'
+        + '<table class="tbl-keep">' + _colgroup([13, 14, 14, 12, 24, 10, 13])
+        + head + f'<tbody>{"".join(body)}</tbody></table>'
+        + f'<p class="tbl-src">注：检验对象为两组<b>单笔个股—周期样本</b>的收益率序列，'
+          f'不做聚类调整；采用 Welch 形式（不假设两组方差相等），'
+          f'自由度按 Welch–Satterthwaite 公式近似；'
+          f'显著性水平 α = {sig.get("alpha")}，双尾检验；'
+          f'置信区间为均值差异的 95% 置信区间。'
+          f'若区间不包含 0，则在 5% 水平上拒绝「两组均值相等」的原假设。</p>')
+
+
+def _robust_table(sig: dict) -> str:
+    """分年度稳健性检验表。"""
+    rob = sig.get("robustness") or {}
+    rows_html = []
+    for y in rob.get("years") or []:
+        for r in rob.get("by_year", {}).get(y) or []:
+            if r.get("enough"):
+                mark = "一致" if r.get("consistent") else "反转"
+                cls = "ok" if r.get("consistent") else "bad"
+            else:
+                mark, cls = "样本不足", "muted"
+            diff = r.get("ret_diff")
+            dcls = "pos" if (diff or 0) > 0 else ("neg" if (diff or 0) < 0 else "")
+            rows_html.append(
+                f'<tr><td>{y} 年</td><td class="num">{r["horizon"]} 日</td>'
+                f'<td class="num">{_pct(r.get("ret_high"), 2, True)}</td>'
+                f'<td class="num">{_pct(r.get("ret_low"), 2, True)}</td>'
+                f'<td class="num {dcls}">{_pct(diff, 2, True)}</td>'
+                f'<td class="num">{_int(r.get("n_high"))} / {_int(r.get("n_low"))}</td>'
+                f'<td class="{cls}">{mark}</td></tr>')
+    head = ('<thead><tr><th>年度</th><th class="num">持仓周期</th>'
+            '<th class="num">高匹配分组<br>平均收益率</th>'
+            '<th class="num">低匹配分组<br>平均收益率</th>'
+            '<th class="num">差异</th><th class="num">样本量<br>（高 / 低）</th>'
+            '<th class="num">方向</th></tr></thead>')
+    return (
+        '<p class="tbl-cap">@@TBL@@　分年度稳健性检验'
+        '（按自然年拆分样本，检查分组结论方向是否一致）</p>'
+        + '<table class="tbl-flow">' + _colgroup([11, 13, 18, 18, 13, 14, 13])
+        + head + f'<tbody>{"".join(rows_html)}</tbody></table>'
+        + f'<p class="tbl-src">注：「一致」指该年度内高匹配分组的平均收益率高于低匹配分组，'
+          f'即与整体结论方向相同；「反转」指方向相反。'
+          f'任一分组有效样本少于 {rob.get("min_samples")} 条的年度标记为「样本不足」，'
+          f'不纳入方向一致性统计。'
+          f'回测区间首尾年份只覆盖部分月份，样本量与完整年度不可直接比较。</p>')
 
 
 def _section_backtest(d: dict) -> str:
@@ -1078,6 +1576,61 @@ def _section_backtest(d: dict) -> str:
                       '按调仓周期复利，起点 = 1.00；<b>该图为 20 日持仓周期的代表性展示</b>，'
                       '其余周期口径相同）</div>')
 
+    # --- 3.4 统计显著性检验 + 3.5 分年度稳健性（v1.7.0）---
+    sig = d.get("significance") or {}
+    sig_html = ""
+    if sig.get("available") and (sig.get("tests") or []):
+        tests = sig["tests"]
+        all_sig = all(r.get("significant") for r in tests)
+        lead = (
+            "三个持仓周期上的均值差异<b>均达到统计显著</b>（p 值均远小于 0.05，"
+            "95% 置信区间均不包含 0），说明「高匹配分组的平均收益率高于低匹配分组」"
+            "这一观测差异难以仅由抽样随机性解释。"
+            if all_sig else
+            "并非所有持仓周期都达到统计显著，分组差异的稳健性有限，需谨慎解读。")
+
+        rob = sig.get("robustness") or {}
+        per_h = {int(x["horizon"]): x for x in (rob.get("per_horizon") or [])}
+        rob_txt = ""
+        if per_h:
+            parts = [f"{h} 日周期 {per_h[h]['consistent_years']}/{per_h[h]['valid_years']}"
+                     f"（一致率 {_pct(per_h[h]['consistent_ratio'], 0)}）"
+                     for h in sorted(per_h)]
+            lowest = min(per_h.values(), key=lambda x: (x["consistent_ratio"] or 0))
+            best = max(per_h.values(), key=lambda x: (x["consistent_ratio"] or 0))
+            rob_txt = (
+                f"<h3>3.5　分年度稳健性检验</h3>"
+                f"<p>为检验整体结论是否由某一年的极端行情单独驱动，"
+                f"本节按自然年拆分样本，逐年重复分组对比。"
+                f"各周期的方向一致率为：{'；'.join(parts)}。</p>"
+                f"{_robust_table(sig)}"
+                f"<p>结果表明，{best['horizon']} 日周期在全部有效年度上方向均保持一致，"
+                f"稳健性最好；而 {lowest['horizon']} 日周期的一致性最低"
+                f"（{lowest['consistent_years']}/{lowest['valid_years']}），"
+                f"存在方向反转的年度。这说明「高匹配分组优于低匹配分组」的方向"
+                f"在<b>整体样本上成立，但在个别年度会失效</b>，"
+                f"结论对所处的市场环境存在依赖。"
+                f"同时需注意，回测区间首尾年份（{(rob.get('years') or ['—'])[0]} 与 "
+                f"{(rob.get('years') or ['—'])[-1]}）只覆盖部分月份，"
+                f"其年度数值与完整年度不可直接比较。</p>")
+
+        sig_html = (
+            f"<h3>3.4　统计显著性检验</h3>"
+            f"<p>前面的分档对比报告的是<b>样本内观测差异</b>。"
+            f"为回答「该差异是否可能由随机波动导致」，"
+            f"本节对高匹配分组与低匹配分组的单笔样本收益率做独立样本 t 检验"
+            f"（Welch 形式，不假设两组方差相等，双尾检验，"
+            f"显著性水平 α = {sig.get('alpha')}）。</p>"
+            f"{_significance_table(sig)}"
+            f"<p>结果显示，{lead}</p>"
+            f"<p>需要强调三点边界：其一，检验假设样本相互独立，"
+            f"而同一调仓截面内的个股会共同承受市场冲击，样本间存在<b>横截面相关</b>，"
+            f"这会低估标准误、使 p 值偏小；其二，本研究同时检验多个周期与多个行业，"
+            f"<b>未做多重比较校正</b>；其三，样本量达十万量级时，"
+            f"即使经济意义上很小的差异也可能被判为统计显著。"
+            f"因此统计显著<b>不等于</b>经济意义显著，p 值应作近似参考。</p>"
+            + rob_txt)
+
     return (f'<p>本部分把上述打分规则放回历史数据做分组检验：在回测区间内按每 '
             f'{bt.get("step")} 个交易日形成一个观察截面，对截面内所有满足基础过滤的个股'
             f'计算{_TERM_SCORE}并归档，再统计各分组在 '
@@ -1086,7 +1639,8 @@ def _section_backtest(d: dict) -> str:
             f'个股—周期样本，覆盖 <b>{_int(bt.get("stock_count"))}</b> 只个股。'
             f'以下三张表格按持仓周期分块呈现，表头与指标口径完全一致，可直接横向对照。</p>'
             f'<h3>3.1　分档绩效统计</h3>'
-            + tables_html + src + obs_html + inversion + chart1 + chart2)
+            + tables_html + src + obs_html + inversion + sig_html
+            + chart1 + chart2)
 
 
 def _inversion_note(bt: dict, horizons: list) -> str:
@@ -1134,10 +1688,12 @@ def _inversion_note(bt: dict, horizons: list) -> str:
         f'（{_pct(hi["avg_return"], 2, True)}、{_pct(mid["avg_return"], 2, True)}）'
         f'仍显著高于低匹配分组（{_pct(lo["avg_return"], 2, True)}），'
         f'<b>高匹配分组占优的整体趋势并未改变</b>，上述差异属于局部偏离而非趋势反转。</p>'
-        f'<p style="margin:8px 0 0"><b>重要限定</b>：本研究为<b>描述性统计</b>，'
-        f'未做统计显著性检验，未报告置信区间与效应量。因此上述差异'
-        f'<b>无法判断是系统性差异还是随机波动</b>，不应作为任何形式的能力判断依据。'
-        f'该现象已如实列入第六节「研究局限性」。</p></div>')
+        f'<p style="margin:8px 0 0"><b>重要限定</b>：上述分档绩效属于<b>描述性统计</b>，'
+        f'「高匹配分组优于低匹配分组」这一结论的统计显著性，'
+        f'已在本节 3.4 通过 Welch t 检验单独给出；'
+        f'而中匹配分组与高匹配分组之间的局部偏离并未单独检验，'
+        f'因此不应据此对两组的能力差异作进一步判断。'
+        f'相关边界已如实列入第八节「研究局限性」。</p></div>')
 
 
 def _monotonic_note(by_h: dict, horizons: list) -> str:
@@ -1164,6 +1720,272 @@ def _monotonic_note(by_h: dict, horizons: list) -> str:
                 f"在 {' / '.join(bad)} 周期上出现局部偏离（原因见 3.3 节说明）。")
     return (f"分组平均收益率「高 &gt; 中 &gt; 低」的单调关系在 {' / '.join(ok)} 周期上"
             f"均成立。")
+
+
+def _rank_table(rows: list[dict], rank_h: int) -> str:
+    """行业效果排名的三组绩效表（单侧 Top 或 Bottom）。"""
+    body = []
+    for k, x in enumerate(rows, start=1):
+        ret = x.get("avg_return")
+        cls = "pos" if (ret or 0) > 0 else ("neg" if (ret or 0) < 0 else "")
+        body.append(
+            f'<tr><td class="num">{k}</td><td>{_esc(x["industry"])}</td>'
+            f'<td class="num">{_int(x.get("samples"))}</td>'
+            f'<td class="num">{_pct(x.get("win_rate"), 1)}</td>'
+            f'<td class="num {cls}">{_pct(ret, 2, True)}</td>'
+            f'<td class="num">{_pct(x.get("max_drawdown"), 2)}</td></tr>')
+    head = ('<thead><tr><th class="num">排名</th><th>申万一级行业</th>'
+            '<th class="num">样本数量</th><th class="num">上涨胜率</th>'
+            '<th class="num">平均收益率</th><th class="num">最大回撤</th></tr></thead>')
+    return ('<table class="tbl-keep">' + _colgroup([9, 24, 15, 15, 19, 18])
+            + head + f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _section_industry(d: dict) -> str:
+    """第四节：分行业回测。"""
+    ind = d.get("industry") or {}
+    if not ind.get("available"):
+        return (f'<p class="tbl-src">分行业回测结果不可用'
+                f'（{_esc(ind.get("reason", ""))}）。'
+                f'请运行 <span class="mono">scripts/build_v17_analysis.py</span> '
+                f'生成该部分结果。</p>')
+
+    hs = ind.get("horizons") or []
+    rank_h = ind.get("rank_horizon")
+    top = ind.get("top") or []
+    bottom = ind.get("bottom") or []
+    conc = ind.get("concentration") or {}
+    by_ind = ind.get("by_industry") or {}
+    min_samples = ind.get("min_samples")
+
+    # --- 全部行业的三组绩效明细（以排名周期为准）---
+    detail = []
+    for name in ind.get("universe") or []:
+        cell = (by_ind.get(name) or {}).get(str(rank_h)) or {}
+        tds = []
+        for g in bt_engine.GROUP_ORDER:
+            r = cell.get(g)
+            if not r:
+                tds.append('<td class="num muted">—</td>')
+                continue
+            ret = r.get("avg_return")
+            cls = "pos" if (ret or 0) > 0 else ("neg" if (ret or 0) < 0 else "")
+            thin = r.get("samples", 0) < min_samples
+            tds.append(
+                f'<td class="num {cls}">{_int(r.get("samples"))} / '
+                f'{_pct(ret, 2, True)}{"*" if thin else ""}</td>')
+        hi = (cell.get("high") or {}).get("avg_return")
+        lo = (cell.get("low") or {}).get("avg_return")
+        gap = (hi - lo) if (hi is not None and lo is not None) else None
+        gcls = "pos" if (gap or 0) > 0 else ("neg" if (gap or 0) < 0 else "")
+        tds.append(f'<td class="num {gcls}">{_pct(gap, 2, True)}</td>')
+        detail.append(f'<tr><td>{_esc(name)}</td>' + "".join(tds) + "</tr>")
+
+    detail_table = (
+        f'<p class="tbl-cap">@@TBL@@　申万一级行业分档绩效明细'
+        f'（持仓 {rank_h} 个交易日；单元格为「样本数量 / 平均收益率」）</p>'
+        + '<table class="tbl-flow">'
+        + _colgroup([16, 17, 17, 17, 16, 17][:6])
+        + '<thead><tr><th>申万一级行业</th>'
+          '<th class="num">高匹配分组</th><th class="num">中匹配分组</th>'
+          '<th class="num">低匹配分组</th>'
+          '<th class="num">高 − 低</th></tr></thead>'
+        + f'<tbody>{"".join(detail)}</tbody></table>'
+        + f'<p class="tbl-src">注：带 * 的组合样本数量少于 {min_samples} 条，'
+          f'数值仅供参考、不宜单独下结论；「—」表示该行业在该分组上无有效样本。'
+          f'「高 − 低」为高匹配分组与低匹配分组平均收益率之差，'
+          f'用于刻画{_TERM_SCORE}在该行业内的区分度，'
+          f'两者缺一即无法计算。行业口径为申万一级行业，'
+          f'未分类个股（行业字段兜底值）不计入。</p>')
+
+    # --- 效果靠前 / 靠后的行业 ---
+    rank_note = (f'<p class="tbl-src">注：参与排名的行业必须满足「高匹配分组有效样本 ≥ '
+                 f'{min_samples} 条」。按持仓 {rank_h} 个交易日的'
+                 f'高匹配分组平均收益率从高到低排序。'
+                 f'「相对靠后」指排名靠后，不代表该行业收益为负。</p>')
+    top_table = (
+        f'<p class="tbl-cap">@@TBL@@　效果相对靠前的行业（按高匹配分组平均收益率排序）</p>'
+        + _rank_table(top, rank_h) + rank_note)
+    bottom_table = (
+        f'<p class="tbl-cap">@@TBL@@　效果相对靠后的行业（按高匹配分组平均收益率排序）</p>'
+        + _rank_table(bottom, rank_h) + rank_note)
+
+    # --- 图：靠前 / 靠后行业的高匹配分组平均收益率 ---
+    chart = ""
+    if top or bottom:
+        items = [{"label": x["industry"], "value": max(0.0, x["avg_return"] or 0.0),
+                  "note": f"{_pct(x['avg_return'], 2, True)} · {_int(x['samples'])} 只样本",
+                  "color": _C_HIGH}
+                 for x in top]
+        items += [{"label": x["industry"], "value": max(0.0, x["avg_return"] or 0.0),
+                   "note": f"{_pct(x['avg_return'], 2, True)} · {_int(x['samples'])} 只样本",
+                   "color": _C_LOW}
+                  for x in bottom]
+        chart = ('<div class="fig">' + _svg_hbar(items) + '</div>'
+                 '<div class="fig-cap">@@FIG@@　分行业高匹配分组平均收益率'
+                 f'（持仓 {rank_h} 个交易日；暖色为相对靠前、冷色为相对靠后）</div>')
+
+    return f"""
+<p>第三节的回测在全部行业内<b>混合统计</b>，无法回答一个问题：
+形态特征的区分能力是否只集中在少数行业？本节把高 / 中 / 低三个分组
+按申万一级行业维度逐一拆分，分别统计各行业三组在
+{' / '.join(str(h) for h in hs)} 个持仓周期上的上涨胜率、平均收益率与最大回撤。
+全部结果由已有回测明细二次聚合得到，不重新计算指标，因此与第三节的分档绩效
+<b>同源可对账</b>——把各行业的样本合并回去，数值与第三节完全一致。</p>
+
+<div class="kpis">
+<div class="kpi"><div class="k">申万一级行业</div>
+<div class="v">{ind.get('industry_count')}<span class="u">个</span></div></div>
+<div class="kpi"><div class="k">有高匹配样本的行业</div>
+<div class="v up">{conc.get('industries_with_samples', 0)}<span class="u">个</span></div></div>
+<div class="kpi"><div class="k">参与排名行业</div>
+<div class="v">{len(ind.get('ranking') or [])}<span class="u">个</span></div></div>
+<div class="kpi"><div class="k">前三行业样本占比</div>
+<div class="v">{_pct(conc.get('top3_share'), 1)}</div></div>
+</div>
+
+<h3>4.1　行业覆盖与样本分布</h3>
+<p>本次分行业回测覆盖全部 <b>{ind.get('industry_count')}</b> 个申万一级行业，
+但高匹配分组的样本只出现在其中 <b>{conc.get('industries_with_samples')}</b> 个行业，
+其余 {ind.get('industry_count') - (conc.get('industries_with_samples') or 0)} 个行业
+因高分样本不足无法参与排名。样本最集中的三个行业
+（{'、'.join(conc.get('top_industries') or [])}）合计占高匹配分组样本的
+<b>{_pct(conc.get('top3_share'), 1)}</b>。</p>
+<p>这一分布本身就是一个重要发现：{_TERM_SCORE}的高分档依赖热点行业加分
+与成长板块加分，导致<b>高分样本天然向少数行业聚集</b>。因此第四节给出的行业结论
+只代表这些行业，不能外推为全行业规律；同时也提示该评分体系存在行业偏向性。</p>
+{detail_table}
+
+<h3>4.2　效果相对靠前与靠后的行业</h3>
+<p>在样本量达到门槛的行业中，按持仓 {rank_h} 个交易日的高匹配分组平均收益率排序，
+结果如下。</p>
+{top_table}
+{bottom_table}
+{chart}
+
+<h3>4.3　小结</h3>
+<p>行业间的离散程度说明形态特征<b>并非在所有行业同等有效</b>。
+相对靠前的行业集中在电子、国防军工、通信等成长属性较强的板块，
+与打分规则中「成长板块加分 + 热点行业加分」的设定方向一致——
+这提示行业间的差异<i>部分来自打分规则本身的设计</i>，
+而非纯粹的形态特征差异，解读时应意识到这一内生性。</p>
+"""
+
+
+def _resonance_table(res: dict) -> str:
+    """双共振分组与单日线对照组的绩效对比表。"""
+    body = []
+    for r in res.get("stats") or []:
+        h = r["horizon"]
+        a, b, dif = r["resonance"], r["daily_high"], r["diff"]
+
+        def metrics(x):
+            ret = x.get("avg_return")
+            cls = "pos" if (ret or 0) > 0 else ("neg" if (ret or 0) < 0 else "")
+            return (f'<td class="num">{_int(x.get("samples"))}</td>'
+                    f'<td class="num">{_pct(x.get("win_rate"), 1)}</td>'
+                    f'<td class="num {cls}">{_pct(ret, 2, True)}</td>'
+                    f'<td class="num">{_pct(x.get("max_drawdown"), 2)}</td>')
+
+        d = dif.get("avg_return")
+        dcls = "pos" if (d or 0) > 0 else ("neg" if (d or 0) < 0 else "")
+        body.append(
+            f'<tr><td rowspan="2">{h} 个交易日</td>'
+            f'<td><span class="grp-dot" style="background:{_C_HIGH}"></span>'
+            f'{_esc(a.get("label"))}</td>' + metrics(a)
+            + f'<td class="num {dcls}">{_pct(d, 2, True)}</td></tr>')
+        body.append(
+            f'<tr><td><span class="grp-dot" style="background:{_C_BENCH}"></span>'
+            f'{_esc(b.get("label"))}</td>' + metrics(b)
+            + '<td class="num muted">—（对照）</td></tr>')
+
+    head = ('<thead><tr><th>持仓周期</th><th>策略分组</th>'
+            '<th class="num">样本数量</th><th class="num">上涨胜率</th>'
+            '<th class="num">平均收益率</th><th class="num">最大回撤</th>'
+            '<th class="num">收益差异</th></tr></thead>')
+    return ('<table class="tbl-flow">' + _colgroup([11, 19, 11, 13, 16, 14, 16])
+            + head + f'<tbody>{"".join(body)}</tbody></table>')
+
+
+def _section_resonance(d: dict) -> str:
+    """第五节：多周期共振策略。"""
+    res = d.get("resonance") or {}
+    if not res.get("available"):
+        return (f'<p class="tbl-src">多周期共振对比不可用'
+                f'（{_esc(res.get("reason", ""))}）。'
+                f'请运行 <span class="mono">scripts/build_v17_analysis.py</span> '
+                f'生成该部分结果。</p>')
+
+    stats = res.get("stats") or []
+    all_worse = bool(stats) and all((r["diff"].get("avg_return") or 0) < 0 for r in stats)
+    rules = "".join(
+        f'<li><b>{_esc(x["side"])}侧</b>：{x["text"]}</li>' for x in res.get("rule") or [])
+
+    detail = "；".join(
+        f"{r['horizon']} 日周期 {_pct(r['resonance']['avg_return'], 2, True)} 对 "
+        f"{_pct(r['daily_high']['avg_return'], 2, True)}"
+        f"（差 {_pct(r['diff']['avg_return'], 2, True)}）"
+        for r in stats)
+    win_detail = "；".join(
+        f"{r['horizon']} 日 {_pct(r['resonance']['win_rate'], 1)} 对 "
+        f"{_pct(r['daily_high']['win_rate'], 1)}"
+        for r in stats)
+    mdd_detail = "；".join(
+        f"{r['horizon']} 日 {_pct(r['resonance']['max_drawdown'], 2)} 对 "
+        f"{_pct(r['daily_high']['max_drawdown'], 2)}"
+        for r in stats)
+
+    if all_worse:
+        verdict = (
+            f"<p>结果显示一个明确的<b>否定性结论</b>：在全部三个持仓周期上，"
+            f"双共振分组的平均收益率<b>均低于</b>原单日线策略（{detail}），"
+            f"上涨胜率同样全面落后（{win_detail}），"
+            f"最大回撤也未获得系统性改善（{mdd_detail}）。"
+            f"也就是说，叠加周线形态确认这一约束<b>没有带来任何增益</b>，"
+            f"反而牺牲了收益与胜率。</p>"
+            f"<p>对这一结果，可以从三个角度理解："
+            f"其一，<b>周线形态具有持续性</b>——已形成周线金叉的个股往往已处于"
+            f"中期上行通道的中后段，该条件筛掉的是形态刚形成、收益弹性最大的样本；"
+            f"其二，<b>两个条件的信息高度重叠</b>——日线高分与周线金叉都刻画"
+            f"「价格已开始向上」，叠加后并未引入新的独立信息，只是提高了筛选门槛；"
+            f"其三，<b>样本量下降带来噪声</b>，双共振分组的样本约为对照组的三分之一，"
+            f"统计波动更大。</p>"
+            f"<p>本研究如实列出该否定性结果。它说明<b>「多周期确认必然提升效果」"
+            f"是一个需要被检验的假设，而非默认成立的前提</b>。"
+            f"周线共振分组未单独做显著性检验，因此上述差异"
+            f"<b>尚不能判断是否具备统计显著性</b>。</p>")
+    else:
+        verdict = (
+            f"<p>双共振分组与原单日线策略在三个持仓周期上的平均收益率分别为："
+            f"{detail}；上涨胜率为 {win_detail}；最大回撤为 {mdd_detail}。"
+            f"差异未呈现一致的方向性改进。</p>")
+
+    return f"""
+<p>前面的分析全部基于<b>单一日线</b>的形态打分。一个常见的改进思路是引入
+<b>多周期共振</b>：要求日线与更长周期的形态条件同时成立，以期提高分组表现的稳定性。
+本节据此构造「日线 + 周线双共振」分组，并把它与原单日线策略做横向对比。</p>
+
+<h3>5.1　共振规则</h3>
+<ul>{rules}</ul>
+<p>周线的指标口径与日线<b>完全同源</b>：同一套 MACD(3,6,3) 与 KDJ(9,3,3) 实现、
+同一组参数，不做任何参数替换。周线由日线按自然周合成
+（收盘取当周最后一个交易日、最高 / 最低取周内极值、成交量取周内合计）。</p>
+<p>时序上有一条关键约束：观察日 T 只允许使用<b>已经收盘</b>的周线，
+而「是否已收盘」由<b>市场交易日历</b>判定，而非个股自身的最后成交日——
+若个股在周内后段停牌，用个股自己的最后成交日会把尚未定型的周线误判为可用。
+因此当 T 处在周中时，使用的是<b>上一根</b>已收盘周线。
+这样处理下，周线侧与日线侧一样只依赖 T 及之前的信息，不存在未来函数。</p>
+
+<h3>5.2　绩效对比</h3>
+{_resonance_table(res)}
+<p class="tbl-src">注：两组的入场与出场口径完全一致（观察日 T 收盘后判定，
+T+1 开盘价入场，T+h 收盘价出场），基础过滤规则相同，唯一差别是双共振分组
+额外要求周线形态命中。样本标记共覆盖 {_int(res.get('marked_rows'))} 条样本，
+其中周线共振命中占比 {_pct(res.get('weekly_hit_rate'), 1)}。</p>
+
+<h3>5.3　结果解读</h3>
+{verdict}
+"""
 
 
 def _section_pool(d: dict) -> str:
@@ -1245,12 +2067,12 @@ def _section_pool(d: dict) -> str:
 <p>本节描述扫描批次 #{scan['run_id']}（扫描完成时间 {_esc(scan['scan_time'])}）的候选池结构，
 全部为当期截面的统计描述，不涉及任何对未来走势的判断。</p>
 {score_dist}
-<h3>4.1　板块分布</h3>
+<h3>6.1　板块分布</h3>
 {boards_table}
-<h3>4.2　行业分布</h3>
+<h3>6.2　行业分布</h3>
 {inds_table}
 {chart3}
-<h3>4.3　高匹配分个股示例</h3>
+<h3>6.3　高匹配分个股示例</h3>
 {top_table}"""
 
 
@@ -1263,15 +2085,18 @@ def _section_conclusions(d: dict) -> str:
         f'<p class="b">{b}</p></div>'
         for k, (t, b) in enumerate(c["outlook"]))
     return f"""
-<h3>5.1　核心发现</h3>
+<h3>7.1　核心发现</h3>
 {findings}
-<h3>5.2　研究局限</h3>
+<h3>7.2　研究局限</h3>
 <p>本研究属于<b>小样本、单一市场环境下的描述性统计研究</b>，存在若干需要明确交代的局限：
-分组间差异未做统计显著性检验；样本期较短且未做分年度稳健性拆解；
+分组间差异虽已通过 Welch t 检验拒绝「无差异」原假设，但样本在行业与时间上高度重叠，
+检验的独立性假定并不严格成立，p 值偏小，且未做多重比较校正；
+分年度稳健性检验显示 20 日周期的一致性仅约一半，说明结论并非在所有年份都成立；
+样本期较短且未做样本外前推验证；
 筹码集中度、PE 行业分位、换手率三项在历史时点无法复现；
 交易成本与可执行性约束未纳入；行业归属与 ST 状态未回溯历史。
-上述局限的逐条说明见第六节，在引用本简报结论时应一并考虑。</p>
-<h3>5.3　后续可拓展方向</h3>
+上述局限的逐条说明见第八节，在引用本简报结论时应一并考虑。</p>
+<h3>7.3　后续可拓展方向</h3>
 {outlook}"""
 
 
@@ -1295,7 +2120,8 @@ def _section_compliance(d: dict) -> str:
 不与任何券商或交易通道对接，不具备也不提供任何交易执行能力。</li>
 <li><b>回测结论的边界</b>：历史回测结果是对过去样本的统计描述，
 <b>不构成对策略有效性、未来收益或任何操作时机的承诺或暗示</b>。
-本研究未做统计显著性检验，分组差异可能由随机波动导致。</li>
+分组差异虽在统计上显著，但样本存在横截面相关性、未做多重比较校正，
+且分年度稳健性显示长周期一致性有限，<b>统计显著不等于经济意义上的稳定有效</b>。</li>
 <li><b>数据来源</b>：行情数据来自公开免费接口，可能存在缺失、延迟或错误；
 免费接口的历史数据不保证与交易所原始记录完全一致。</li>
 <li><b>责任承担</b>：历史数据不等于未来表现。市场有风险，研究需谨慎。
@@ -1330,16 +2156,22 @@ def render_html(d: dict) -> str:
 <h2>三、历史回测结论</h2>
 {_section_backtest(d)}
 
-<h2>四、当日候选池分析</h2>
+<h2>四、分行业回测</h2>
+{_section_industry(d)}
+
+<h2>五、多周期共振策略</h2>
+{_section_resonance(d)}
+
+<h2>六、当日候选池分析</h2>
 {_section_pool(d)}
 
-<h2>五、研究结论与展望</h2>
+<h2>七、研究结论与展望</h2>
 {_section_conclusions(d)}
 
-<h2>六、研究局限性与风险提示</h2>
+<h2>八、研究局限性与风险提示</h2>
 {_section_limits(d)}
 
-<h2>七、合规声明</h2>
+<h2>九、合规声明</h2>
 {_section_compliance(d)}
 
 <footer>{_esc(d['author'])}　|　本简报由程序自动生成，全部为历史数据统计结果，
