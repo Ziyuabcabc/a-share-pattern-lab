@@ -221,6 +221,27 @@ python -m uvicorn app.main:app --host 127.0.0.1 --port 8000
 
 > **重要**：服务仅绑定 `127.0.0.1`，仅限本机访问。请勿修改监听地址对外提供服务。
 
+### 常驻运行（推荐）
+
+在编辑器或终端里直接前台运行 uvicorn 时，**调用方一退出子进程就会被连带回收**，
+表现为「服务刚起来就掉线」。要在后台长期驻留，用自带的启动脚本：
+
+```bash
+# 停掉旧进程并重启，等待健康检查通过后返回
+python scripts/start_server.py --port 8765
+```
+
+该脚本在 Windows 上优先通过 WMI（`Win32_Process.Create`）创建进程，
+使 uvicorn 完全脱离调用方的作业对象，因此终端关闭后依然监听；
+WMI 不可用时回退到 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`。
+日志写入 `output/uvicorn.log`，实际的服务入口是 `scripts/serve_local.py`
+（由它自行处理日志重定向，可单独运行）。
+
+```bash
+# 查看服务状态
+curl http://127.0.0.1:8765/api/health
+```
+
 ### 开发预览（合成数据）
 
 不依赖真实数据即可查看看板效果（写入独立的临时数据库）：
@@ -502,7 +523,8 @@ a-share-pattern-lab/
 │   ├── build_backtest.py    # 执行一次回测并落库（支持 --start/--end/--limit/--force）
 │   ├── build_v17_analysis.py # v1.7 四项研究分析串行构建（--only/--skip-*/--run-id）
 │   ├── make_pdf.py          # Playwright 子进程将简报 HTML 渲染为 PDF
-│   ├── start_server.py      # 重启本地看板服务（仅绑定 127.0.0.1）
+│   ├── start_server.py      # 重启本地看板服务（WMI 独立进程，仅绑定 127.0.0.1）
+│   ├── serve_local.py       # 服务实际入口：日志重定向 + uvicorn.run
 │   └── word_check.py        # 措辞合规自检
 ├── docs/
 │   ├── project_report.md    # 规则详解、数据源降级与前端实现说明
