@@ -162,7 +162,8 @@ _SAMPLE = {
     ],
     "counts": {"all": 3, "domestic": 1, "overseas": 1, "macro": 1},
     "sources": ["测试源"],
-    "cached_at": "2026-09-15 22:00:00",
+    # 必须取当前时刻：缓存 TTL 为 30 分钟，写死时间戳会让用例随日期推移必然失败
+    "cached_at": news._now(),
     "message": "",
     "errors": [],
     "source_note": config.NEWS_SOURCE_NOTE,

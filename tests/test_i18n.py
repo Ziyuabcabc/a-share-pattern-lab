@@ -42,6 +42,12 @@ DYNAMIC_KEYS = {
     "newsCatDomestic", "newsCatOverseas", "newsCatMacro",
     # OVERSEAS_TAG
     "tagOvernight", "tagToday",
+    # BT_GROUP_KEY（回测分档标签，v1.6.0）
+    "btGroupHigh", "btGroupMid", "btGroupLow",
+    "btGrpHighShort", "btGrpMidShort", "btGrpLowShort",
+    # REP_OUTLINE_KEYS（研究简报六节目录，v1.6.0）
+    "repOutline1", "repOutline2", "repOutline3",
+    "repOutline4", "repOutline5", "repOutline6",
 }
 
 
@@ -148,10 +154,23 @@ def test_board_and_index_maps_are_complete():
 
 
 def test_no_legacy_version_reference():
-    """静态资源版本号应统一，避免升级后浏览器沿用旧脚本。"""
+    """静态资源版本号应统一，避免升级后浏览器沿用旧脚本。
+
+    版本号以 app.js 头部注释的「版本：vX.Y.Z」为唯一事实来源，
+    避免每次升级都要改测试。
+    """
     html = _read("index.html")
-    assert "?v=1.5.0" in html
-    assert "?v=1.4.0" not in html
+    js = _read("app.js")
+
+    m = re.search(r"版本：v(\d+\.\d+\.\d+)", js)
+    assert m, "app.js 头部未找到版本号声明"
+
+    versions = set(re.findall(r"\?v=([\d.]+)", html))
+    assert versions, "index.html 未给静态资源加版本号"
+    assert versions == {m.group(1)}, (
+        f"资源版本号与 app.js 声明不一致：html={sorted(versions)} "
+        f"app.js={m.group(1)}"
+    )
     assert "/static/i18n.js" in html, "页面未引入语言包"
     # 语言包必须在 app.js 之前加载
     assert html.index("/static/i18n.js") < html.index("/static/app.js")

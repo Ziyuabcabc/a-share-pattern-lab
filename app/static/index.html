@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A 股历史形态匹配研究看板 · 本地运行版</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css?v=1.5.0">
+<link rel="stylesheet" href="/static/app.css?v=1.6.0">
 </head>
 <body>
 
@@ -160,6 +160,68 @@
     <div class="chart-box" id="industryChart"></div>
   </section>
 
+  <!-- ===================== 策略回测 ===================== -->
+  <section class="card" id="btCard">
+    <div class="card-head">
+      <div class="card-title">
+        <h2 data-i18n="btTitle">策略回测</h2>
+        <p class="card-sub" id="btSub" data-i18n="btSub">按形态匹配分分档，统计历史持仓 5 / 10 / 20 个交易日的绩效表现；回测用未来信息已严格规避</p>
+      </div>
+      <div class="filters">
+        <div class="seg" id="btHorizon" role="group" data-i18n-aria="btHorizonAria" aria-label="持仓周期">
+          <button type="button" class="seg-opt" data-h="5" data-i18n="btH5">5 日</button>
+          <button type="button" class="seg-opt is-on" data-h="10" data-i18n="btH10">10 日</button>
+          <button type="button" class="seg-opt" data-h="20" data-i18n="btH20">20 日</button>
+        </div>
+        <button class="btn btn-ghost" id="btnBtCsv" data-i18n="btnBtCsv">导出回测明细</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <div class="bt-meta" id="btMeta"></div>
+      <div class="chart-box chart-bt" id="btChart"></div>
+      <div class="table-wrap table-bt">
+        <table id="btTable">
+          <colgroup>
+            <col style="width:20%"><col style="width:13%"><col style="width:13%">
+            <col style="width:14%"><col style="width:14%"><col style="width:13%"><col style="width:13%">
+          </colgroup>
+          <thead>
+            <tr>
+              <th data-i18n="btThGroup">分组</th>
+              <th class="num" data-i18n="btThSamples">样本数</th>
+              <th class="num" data-i18n="btThWin">上涨胜率</th>
+              <th class="num" data-i18n="btThAvg">平均收益率</th>
+              <th class="num" data-i18n="btThExcess">超额收益</th>
+              <th class="num" data-i18n="btThMdd">最大回撤</th>
+              <th class="num" data-i18n="btThPl">盈亏比</th>
+            </tr>
+          </thead>
+          <tbody id="btBody"></tbody>
+        </table>
+        <div class="empty" id="btEmpty" hidden data-i18n="btEmpty">暂无回测结果 —— 请先构建回测数据并执行回测</div>
+      </div>
+      <p class="bt-method" id="btMethod"></p>
+    </div>
+  </section>
+
+  <!-- ===================== 研究简报 ===================== -->
+  <section class="card" id="repCard">
+    <div class="card-head">
+      <div class="card-title">
+        <h2 data-i18n="repTitle">研究简报</h2>
+        <p class="card-sub" data-i18n="repSub">按标准学术结构自动生成，数据与看板实时同步，同一批次可完整复现</p>
+      </div>
+      <div class="filters">
+        <button class="btn btn-ghost" id="btnRepPreview" data-i18n="btnRepPreview">预览简报</button>
+        <button class="btn btn-primary" id="btnRepPdf" data-i18n="btnRepPdf">导出 PDF</button>
+      </div>
+    </div>
+    <div class="card-body">
+      <ul class="rep-outline" id="repOutline"></ul>
+      <p class="hint" id="repMeta"></p>
+    </div>
+  </section>
+
   <!-- ===================== 市场资讯 ===================== -->
   <section class="card" id="newsCard">
     <div class="card-head">
@@ -217,8 +279,8 @@
   </div>
 </aside>
 
-<script src="/static/i18n.js?v=1.5.0"></script>
-<script src="/static/vendor/echarts.min.js?v=1.5.0"></script>
-<script src="/static/app.js?v=1.5.0"></script>
+<script src="/static/i18n.js?v=1.6.0"></script>
+<script src="/static/vendor/echarts.min.js?v=1.6.0"></script>
+<script src="/static/app.js?v=1.6.0"></script>
 </body>
 </html>

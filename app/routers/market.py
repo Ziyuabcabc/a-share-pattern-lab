@@ -15,9 +15,22 @@ from app.scoring import load_hot_industries
 router = APIRouter(prefix="/api/market", tags=["市场数据"])
 
 _INDEX_CACHE_KEY = "index_snapshot_cache"
-# 指数快照短时缓存（秒）：行情源偶发较慢，缓存可避免每次打开看板都等待；
-# 缓存内容自带 cached_at，前端会明确标注数据时间。
+# 指数快照短时缓存（秒）：行情源偶发较慢，缓存可避免每次打开看板都等待。
+#
+# 缓存里区分两个时间：
+#   cached_at   数据时间 —— 展示给用户看（沿用旧快照时保持旧时间，不伪装成刚更新）
+#   fetched_at  重试基准 —— 决定这份快照还能用多久
+# 完整性不同的快照用不同 TTL：国内/海外两侧都拿到时缓存 5 分钟；
+# 只有一侧拿到时只缓存 1 分钟，让缺失的一侧尽快重试补齐
+# （曾出现过的真实故障：单侧失败后空列表被锁 5 分钟，宏观面板一直空一行）。
 _INDEX_CACHE_TTL_SEC = 300
+_INDEX_PARTIAL_TTL_SEC = 60
+
+
+def _cache_ttl(cached: dict) -> int:
+    """完整快照用长 TTL，残缺快照用短 TTL。"""
+    complete = bool(cached.get("items")) and bool(cached.get("overseas"))
+    return _INDEX_CACHE_TTL_SEC if complete else _INDEX_PARTIAL_TTL_SEC
 
 
 def _read_index_cache(conn) -> dict | None:
@@ -29,12 +42,11 @@ def _read_index_cache(conn) -> dict | None:
         return None
     try:
         cached = json.loads(row["value"])
-        age = (
-            datetime.now() - datetime.fromisoformat(cached["cached_at"])
-        ).total_seconds()
+        base = cached.get("fetched_at") or cached.get("cached_at")
+        age = (datetime.now() - datetime.fromisoformat(base)).total_seconds()
     except (TypeError, ValueError, KeyError):
         return None
-    return cached if age <= _INDEX_CACHE_TTL_SEC else None
+    return cached if age <= _cache_ttl(cached) else None
 
 
 @router.get("/indices", summary="宏观参考面板：国内指数 + 海外/港股指数")
@@ -55,21 +67,43 @@ def indices():
                 "disclaimer": DISCLAIMER,
             }
 
-    rows: list[dict] = []
+    # 本次新抓到的内容（可能某一侧为空）
+    fresh_rows: list[dict] = []
     try:
-        rows = data_source.fetch_index_snapshot() or []
+        fresh_rows = data_source.fetch_index_snapshot() or []
     except Exception:  # noqa: BLE001 —— 指数源异常时不让首页报错
-        rows = []
-    overseas: list[dict] = []
+        fresh_rows = []
+    fresh_overseas: list[dict] = []
     try:
-        overseas = data_source.fetch_overseas_indices() or []
+        fresh_overseas = data_source.fetch_overseas_indices() or []
     except Exception:  # noqa: BLE001
-        overseas = []
+        fresh_overseas = []
 
     cached_at: str | None = None
     with db.get_conn() as conn:
+        # 上一份快照，用于「单侧抓取失败」时补齐缺失的一侧
+        prev: dict | None = None
+        prev_row = conn.execute(
+            "SELECT value FROM meta WHERE key=?", (_INDEX_CACHE_KEY,)
+        ).fetchone()
+        if prev_row:
+            try:
+                prev = json.loads(prev_row["value"])
+            except (TypeError, ValueError):
+                prev = None
+        prev = prev or {}
+
+        # 关键：某一侧抓取失败时，用上一份成功快照补齐，
+        # 绝不能把空列表写进缓存（否则该侧会在整个 TTL 内持续为空）。
+        rows = fresh_rows or (prev.get("items") or [])
+        overseas = fresh_overseas or (prev.get("overseas") or [])
+        reused_prev = bool((not fresh_rows and rows) or (not fresh_overseas and overseas))
+
         if rows or overseas:
-            cached_at = _now()
+            # 数据时间：只要有一侧沿用了旧快照，整体就标旧时间戳
+            # （宁可标旧，也不能把旧数据标成刚刚更新）
+            cached_at = prev.get("cached_at") if reused_prev else None
+            cached_at = cached_at or _now()
             conn.execute(
                 "INSERT INTO meta(key, value) VALUES(?, ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -80,23 +114,12 @@ def indices():
                             "items": rows,
                             "overseas": overseas,
                             "cached_at": cached_at,
+                            "fetched_at": _now(),
                         },
                         ensure_ascii=False,
                     ),
                 ),
             )
-        else:
-            row = conn.execute(
-                "SELECT value FROM meta WHERE key=?", (_INDEX_CACHE_KEY,)
-            ).fetchone()
-            if row:
-                try:
-                    cached = json.loads(row["value"])
-                    rows = cached.get("items") or []
-                    overseas = cached.get("overseas") or []
-                    cached_at = cached.get("cached_at")
-                except (TypeError, ValueError):
-                    rows, overseas = [], []
     return {
         "items": rows,
         "overseas": overseas,

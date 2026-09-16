@@ -2,7 +2,7 @@
    A股历史形态匹配研究看板 · 前端逻辑（本地运行版）
    数据来源：本地 FastAPI 接口（/api/*），全部为历史统计与指标展示。
    分数含义：与历史上升段启动样本的特征相似程度，不代表未来表现。
-   版本：v1.5.0（中英双语切换 + 视觉体系收敛 + 市场资讯模块）
+   版本：v1.6.0（历史回测模块 + 研究简报自动生成；保留 v1.5.0 全部功能）
 
    双语实现约定：
    - 所有界面文案走 I18N.t()（语言包见 static/i18n.js），页面内不散落文案；
@@ -62,6 +62,10 @@ const state = {
   newsSources: [],
   newsCachedAt: "",
   newsSourceNote: "",
+  bt: null,               // 回测摘要（一次拉取，切周期/切语言均本地重绘）
+  btHorizon: 10,          // 当前持仓周期（交易日）
+  btChart: null,          // 回测净值曲线图实例
+  repMeta: "",            // 研究简报最近一次导出时间
 };
 
 const $ = (id) => document.getElementById(id);
@@ -133,6 +137,8 @@ function bindEvents() {
   }
   I18N.onChange(() => { syncLangUI(); rerenderAll(); });
 
+  bindBacktestAndReport();
+
   window.addEventListener("resize", debounce(() => {
     syncStickyOffset();
     resizeCharts();
@@ -171,16 +177,22 @@ function rerenderAll() {
   renderNews();
   renderNewsMeta();
   renderNewsNote();
+  renderBacktest();
+  renderReportOutline();
+  renderReportMeta();
   if (!state.polling) $("scanLog").textContent = t("scanLogIdle");
   if (state.detailPayload && $("drawer").classList.contains("show")) renderDrawerAll();
   syncStickyOffset();
 }
 
 async function refreshAll() {
-  // 宏观面板行情源与资讯接口都可能较慢，一律独立加载、不阻塞主内容：
+  // 宏观面板行情源、资讯接口与回测接口都可能较慢，一律独立加载、不阻塞主内容：
   // 先渲染占位保证版面立即稳定，数据到达后原地替换。
   loadIndices();
   loadNews();
+  loadBacktest();
+  renderReportOutline();
+  renderReportMeta();
   await Promise.all([loadStatus(), loadFilters()]);
   await loadPool();
   loadIndustryChart();
@@ -1034,6 +1046,264 @@ function closeDrawer() {
 function resizeCharts() {
   state.chart && state.chart.resize();
   state.detailChart && state.detailChart.resize();
+  state.btChart && state.btChart.resize();
+}
+
+/* =========================================================================
+   策略回测（v1.6.0）
+   -------------------------------------------------------------------------
+   数据一次拉取（/api/backtest/summary）缓存在 state.bt，
+   切换持仓周期与切换语言都只做本地重绘，不重复请求接口。
+   图表为「三档累计净值 + 沪深300 基准」四条线，按调仓周期复利，起点 = 1.00。
+   ========================================================================= */
+const BT_GROUP_KEY = {
+  high: { label: "btGroupHigh", short: "btGrpHighShort", color: "#c4574e" },
+  mid: { label: "btGroupMid", short: "btGrpMidShort", color: "#d99a3d" },
+  low: { label: "btGroupLow", short: "btGrpLowShort", color: "#8c93a3" },
+};
+const BT_BENCH_COLOR = "#6b7280";
+const BT_ORDER = ["high", "mid", "low"];
+
+const btGroupLabel = (g) => t((BT_GROUP_KEY[g] || {}).label || "btThGroup");
+const btGroupShort = (g) => t((BT_GROUP_KEY[g] || {}).short || "btThGroup");
+
+/* 百分比展示：带正负号（涨红跌绿沿用全站惯例） */
+function btPct(v, digits = 2) {
+  if (v === null || v === undefined || Number.isNaN(Number(v))) return "--";
+  const n = Number(v) * 100;
+  return `${n > 0 ? "+" : ""}${n.toFixed(digits)}%`;
+}
+function btRatio(v) {
+  return v === null || v === undefined || Number.isNaN(Number(v)) ? "—" : Number(v).toFixed(2);
+}
+
+async function loadBacktest() {
+  $("btBody").innerHTML = `<tr><td colspan="7" class="bt-loading">${esc(t("btLoading"))}</td></tr>`;
+  try {
+    state.bt = await get("/api/backtest/summary");
+  } catch {
+    state.bt = null;
+  }
+  renderBacktest();
+}
+
+function renderBacktest() {
+  const d = state.bt;
+  const empty = $("btEmpty");
+  const ok = d && d.available;
+  empty.hidden = !!ok;
+  if (!ok) {
+    $("btBody").innerHTML = "";
+    $("btMeta").innerHTML = "";
+    $("btMethod").innerHTML = "";
+    $("btEmpty").textContent = d && d.reason ? d.reason : t("btEmpty");
+    if (state.btChart) { state.btChart.dispose(); state.btChart = null; }
+    $("btChart").innerHTML = "";
+    return;
+  }
+
+  const horizons = (d.horizons || []).map(Number);
+  if (!horizons.includes(state.btHorizon)) state.btHorizon = horizons.includes(20) ? 20 : horizons[0];
+  for (const b of document.querySelectorAll("#btHorizon .seg-opt")) {
+    b.classList.toggle("is-on", Number(b.dataset.h) === state.btHorizon);
+  }
+
+  // 概况条
+  const bm = d.benchmark || {};
+  const items = [
+    ["btRange", `${d.start_date || "--"} ~ ${d.end_date || "--"}`],
+    ["btPoints", `${d.rebalance_points || 0} ${t("btUnitPoints")}`],
+    ["btStocks", `${(d.stock_count || 0).toLocaleString()} ${t("btUnitStocks")}`],
+    ["btSamples", `${(d.obs_count || 0).toLocaleString()} ${t("btUnitSamples")}`],
+    ["btBenchmark", `${I18N.indexName(bm.name) || bm.name || "--"}`],
+    ["btScoreMax", `${d.score_max || "--"} ${t("btUnitScore")}`],
+  ];
+  $("btMeta").innerHTML = items
+    .map(([k, v]) => `<span>${esc(t(k))}　<b>${esc(v)}</b></span>`).join("");
+
+  renderBacktestTable();
+  drawBacktestChart();
+
+  // 方法学说明（折叠展示，避免占用主视觉）
+  const notes = d.method_notes || [];
+  $("btMethod").innerHTML = notes.length
+    ? `<details class="bt-notes"><summary>${esc(t("btDialogTitle"))}</summary><ol>${
+        notes.map((x) => `<li>${esc(x)}</li>`).join("")}</ol></details>`
+      + `<p class="bt-foot">${esc(t("btFootnote"))}</p>`
+    : `<p class="bt-foot">${esc(t("btFootnote"))}</p>`;
+}
+
+function renderBacktestTable() {
+  const d = state.bt;
+  const rows = (d.stats_by_horizon || {})[String(state.btHorizon)] || [];
+  const byGroup = {};
+  for (const r of rows) byGroup[r.group] = r;
+  $("btBody").innerHTML = BT_ORDER.map((g) => {
+    const r = byGroup[g] || {};
+    const color = (BT_GROUP_KEY[g] || {}).color || C.flat;
+    return `<tr>
+      <td><span class="grp-dot" style="background:${color}"></span>${esc(btGroupLabel(g))}</td>
+      <td class="num">${(r.samples || 0).toLocaleString()}</td>
+      <td class="num">${r.win_rate == null ? "—" : (Number(r.win_rate) * 100).toFixed(1) + "%"}</td>
+      <td class="num ${pctCls(r.avg_return)}">${btPct(r.avg_return)}</td>
+      <td class="num ${pctCls(r.excess_return)}">${btPct(r.excess_return)}</td>
+      <td class="num">${r.max_drawdown == null ? "—" : (Number(r.max_drawdown) * 100).toFixed(2) + "%"}</td>
+      <td class="num">${btRatio(r.pl_ratio)}</td>
+    </tr>`;
+  }).join("");
+}
+
+function drawBacktestChart() {
+  const el = $("btChart");
+  const d = state.bt;
+  if (!d || !d.available) return;
+  const h = String(state.btHorizon);
+  const eq = d.equity || {};
+  const bench = (d.benchmark_equity || {})[h] || [];
+
+  const series = [];
+  let dates = [];
+  for (const g of BT_ORDER) {
+    const pts = (eq[g] || {})[h] || [];
+    if (!pts.length) continue;
+    if (pts.length > dates.length) dates = pts.map((p) => p.date);
+    series.push({
+      name: btGroupLabel(g),
+      color: (BT_GROUP_KEY[g] || {}).color || C.accent,
+      values: pts.map((p) => p.nav),
+    });
+  }
+  if (bench.length) {
+    if (bench.length > dates.length) dates = bench.map((p) => p.date);
+    series.push({
+      name: I18N.indexName((d.benchmark || {}).name) || t("btBenchmark"),
+      color: BT_BENCH_COLOR,
+      values: bench.map((p) => p.nav),
+    });
+  }
+
+  if (!series.length) {
+    if (state.btChart) { state.btChart.dispose(); state.btChart = null; }
+    el.innerHTML = `<div class="empty">${esc(t("btEmpty"))}</div>`;
+    return;
+  }
+  if (el.querySelector(".empty")) el.innerHTML = "";
+  if (!state.btChart) state.btChart = echarts.init(el);
+
+  state.btChart.setOption({
+    animationDuration: 480,
+    textStyle: { fontFamily: "inherit" },
+    tooltip: {
+      trigger: "axis",
+      axisPointer: { type: "line", lineStyle: { color: "#c7ccd6" } },
+      backgroundColor: "rgba(255,255,255,.97)",
+      borderColor: C.border, borderWidth: 1, padding: [9, 12],
+      textStyle: { color: C.text, fontSize: 12 },
+      valueFormatter: (v) => (v == null ? "--" : Number(v).toFixed(3)),
+    },
+    legend: {
+      top: 0, right: 4, itemWidth: 14, itemHeight: 8, itemGap: 16,
+      textStyle: { color: C.text2, fontSize: 11 },
+    },
+    grid: { left: 56, right: 22, top: 34, bottom: 44 },
+    xAxis: {
+      type: "category", data: dates, boundaryGap: false,
+      axisLine: { lineStyle: { color: C.border } },
+      axisTick: { show: false },
+      axisLabel: { fontSize: 10, color: C.axis, hideOverlap: true },
+    },
+    yAxis: {
+      type: "value", scale: true,
+      splitLine: { lineStyle: { color: C.grid } },
+      axisLine: { show: false }, axisTick: { show: false },
+      axisLabel: { fontSize: 10, color: C.axis, formatter: (v) => Number(v).toFixed(2) },
+    },
+    series: series.map((s) => ({
+      name: s.name, type: "line", data: s.values, smooth: false,
+      symbol: "none", lineStyle: { width: 1.8, color: s.color },
+      itemStyle: { color: s.color },
+      emphasis: { focus: "series" },
+    })),
+  }, true);
+  state.btChart.resize();
+}
+
+/* =========================================================================
+   研究简报（v1.6.0）
+   - 预览：新标签页打开 /api/report/html（自包含 HTML，可直接打印）
+   - 导出：/api/report/export 返回 PDF，前端以 blob 方式下载并提示状态
+   ========================================================================= */
+const REP_OUTLINE_KEYS = [
+  "repOutline1", "repOutline2", "repOutline3",
+  "repOutline4", "repOutline5", "repOutline6",
+];
+
+function renderReportOutline() {
+  $("repOutline").innerHTML = REP_OUTLINE_KEYS
+    .map((k, i) => `<li><span class="rep-n">${String(i + 1).padStart(2, "0")}</span>`
+      + `<span>${esc(t(k))}</span></li>`).join("");
+}
+
+function previewReport() {
+  const url = state.runId ? `/api/report/html?scan_run_id=${state.runId}` : "/api/report/html";
+  const w = window.open(url, "_blank");
+  if (!w) window.alert(t("repPreviewFail"));
+}
+
+async function exportReportPdf() {
+  const btn = $("btnRepPdf");
+  const old = btn.textContent;
+  btn.disabled = true;
+  btn.textContent = t("repExporting");
+  try {
+    const r = await fetch("/api/report/export", { cache: "no-store" });
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}));
+      throw new Error(body.detail || `HTTP ${r.status}`);
+    }
+    const blob = await r.blob();
+    const a = document.createElement("a");
+    const url = URL.createObjectURL(blob);
+    a.href = url;
+    a.download = `research-note-${new Date().toISOString().slice(0, 10)}.pdf`;
+    document.body.appendChild(a);
+    a.click();
+    a.remove();
+    setTimeout(() => URL.revokeObjectURL(url), 4000);
+    state.repMeta = new Date().toLocaleString();
+    renderReportMeta();
+  } catch (e) {
+    window.alert(`${t("repExportFail")}：${e.message}`);
+  } finally {
+    btn.disabled = false;
+    btn.textContent = old;
+  }
+}
+
+function renderReportMeta() {
+  const el = $("repMeta");
+  const ts = state.repMeta || new Date().toLocaleString();
+  el.textContent = `${t("repMeta")}：${ts}　|　${t("repFootNote")}`;
+}
+
+function bindBacktestAndReport() {
+  for (const b of document.querySelectorAll("#btHorizon .seg-opt")) {
+    b.addEventListener("click", () => {
+      state.btHorizon = Number(b.dataset.h);
+      for (const x of document.querySelectorAll("#btHorizon .seg-opt")) {
+        x.classList.toggle("is-on", x === b);
+      }
+      renderBacktestTable();
+      drawBacktestChart();
+    });
+  }
+  $("btnBtCsv").addEventListener("click", () => {
+    const p = new URLSearchParams();
+    if (state.bt && state.bt.run_id) p.set("run_id", state.bt.run_id);
+    window.open(`/api/backtest/trades.csv?${p}`, "_blank");
+  });
+  $("btnRepPreview").addEventListener("click", previewReport);
+  $("btnRepPdf").addEventListener("click", exportReportPdf);
 }
 
 /* ---------------- 请求封装 ---------------- */
