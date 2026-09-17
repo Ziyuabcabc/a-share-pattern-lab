@@ -38,9 +38,14 @@ def _warm_index_cache() -> None:
 
 
 def _warm_news_cache() -> None:
-    """后台预热市场资讯缓存（失败不影响主流程）。"""
+    """后台预热市场资讯缓存（失败不影响主流程）。
+
+    走 `news.warm_cache()` 这个专用入口，而不是直接调用路由处理函数：
+    路由签名中的 `Query(...)` 只有在 FastAPI 完成参数解析后才变为真实取值，
+    直接函数调用拿到的是 `Query` 对象本身（曾导致每次启动都预热失败）。
+    """
     try:
-        news.news()
+        news.warm_cache()
         logger.info("市场资讯缓存预热完成")
     except Exception as exc:  # noqa: BLE001
         logger.warning("市场资讯缓存预热失败: %s", exc)

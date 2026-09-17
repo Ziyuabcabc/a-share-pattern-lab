@@ -224,3 +224,61 @@ def test_api_uses_cache_after_first_success(monkeypatch, tmp_path):
     # 缓存确实落库
     with db.get_conn() as conn:
         assert db.meta_get(conn, config.NEWS_CACHE_KEY) is not None
+
+
+# ---------------------------------------------------------------------------
+# 启动预热（回归：路由函数的 Query 默认值在直接调用时不是真实取值）
+# ---------------------------------------------------------------------------
+def test_startup_warmup_actually_populates_cache(monkeypatch, tmp_path, caplog):
+    """回归用例：服务启动的市场资讯预热必须真的写入缓存。
+
+    旧实现里 `_warm_news_cache()` 直接调用路由函数 `news.news()`。
+    路由签名中的 `Query(...)` 只有经 FastAPI 参数解析后才变为真实取值，
+    直接调用拿到的是 `Query` 对象，于是 `items[:cap]` 抛
+    `TypeError: slice indices must be integers or None or have an __index__ method`，
+    该异常被 try/except 吞成一条 warning——表现为**每次启动都静默预热失败**，
+    首屏资讯退化为「打开页面时才现抓」。这里断言缓存确实落库且无失败告警。
+    """
+    from app import main as app_main
+
+    _patch_feed(monkeypatch, tmp_path, _SAMPLE)
+    with caplog.at_level("WARNING"):
+        app_main._warm_news_cache()
+
+    assert "预热失败" not in caplog.text, caplog.text
+    with db.get_conn() as conn:
+        assert db.meta_get(conn, config.NEWS_CACHE_KEY) is not None
+
+
+def test_warm_cache_is_usable_without_request_parsing(monkeypatch, tmp_path):
+    """`warm_cache()` 不依赖任何请求参数，可被后台线程安全调用。"""
+    calls = {"n": 0}
+    _patch_feed(monkeypatch, tmp_path, _SAMPLE)
+
+    def counted():
+        calls["n"] += 1
+        return dict(_SAMPLE)
+
+    monkeypatch.setattr(news, "_build_feed", counted)
+    assert news.warm_cache()["available"] is True
+    # 二次调用命中缓存，不重复抓取
+    assert news.warm_cache()["available"] is True
+    assert calls["n"] == 1
+
+
+def test_warmup_entrypoint_does_not_call_route_handler():
+    """预热入口不得回退成直接调用路由函数（结构守卫）。"""
+    import inspect
+
+    from app import main as app_main
+
+    src = inspect.getsource(app_main._warm_news_cache)
+    assert "news.warm_cache()" in src
+    assert "news.news()" not in src
+
+
+def test_limit_query_still_applies_on_the_route(monkeypatch, tmp_path):
+    """抽取 _load_or_build 后，接口侧的 limit 截断行为保持不变。"""
+    _patch_feed(monkeypatch, tmp_path, _SAMPLE)
+    body = client.get("/api/news?limit=2").json()
+    assert len(body["items"]) == 2

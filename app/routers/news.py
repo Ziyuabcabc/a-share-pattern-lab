@@ -352,6 +352,50 @@ def _read_cache(conn) -> dict | None:
     return cached if age <= config.NEWS_CACHE_TTL_SEC else None
 
 
+def _load_or_build(conn) -> dict:
+    """读取资讯缓存；缺失或过期时抓取一次并落库（与请求参数无关）。
+
+    单独抽出的原因：服务启动预热需要复用这段逻辑，而**不能直接调用路由函数**——
+    路由函数签名里的 `Query(...)` 只有在经过 FastAPI 的参数解析后才会变成真实取值，
+    直接以函数方式调用拿到的是 `Query` 对象本身，于是
+    `cap = limit or config.NEWS_MAX_ITEMS` 会取出一个对象，
+    `items[:cap]` 即以 `TypeError: slice indices must be integers or None or
+    have an __index__ method` 失败（表现为每次启动都静默预热失败）。
+    """
+    data = _read_cache(conn)
+    if data is not None:
+        return data
+    try:
+        data = _build_feed()
+    except Exception as exc:  # noqa: BLE001 —— 资讯失败绝不向上抛
+        logger.warning("资讯抓取异常: %s", exc)
+        data = {
+            "available": False,
+            "items": [],
+            "counts": {"all": 0},
+            "sources": [],
+            "cached_at": _now(),
+            "message": "资讯暂不可用",
+            "errors": [type(exc).__name__],
+            "source_note": config.NEWS_SOURCE_NOTE,
+            "categories": [{"key": k, "label": v} for k, v in config.NEWS_CATEGORIES],
+            "disclaimer": config.DISCLAIMER,
+        }
+    if data.get("available"):
+        conn.execute(
+            "INSERT INTO meta(key, value) VALUES(?, ?) "
+            "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+            (config.NEWS_CACHE_KEY, json.dumps(data, ensure_ascii=False)),
+        )
+    return data
+
+
+def warm_cache() -> dict:
+    """刷新资讯缓存（供服务启动预热调用，与请求参数无关）。"""
+    with db.get_conn() as conn:
+        return _load_or_build(conn)
+
+
 @router.get("", summary="市场资讯：国内 / 海外 / 宏观三类快讯")
 def news(
     category: str = Query("all", description="all | domestic | overseas | macro"),
@@ -365,30 +409,7 @@ def news(
     - 本接口只做聚合与归类，不生成、不解读、不评价任何资讯内容。
     """
     with db.get_conn() as conn:
-        data = _read_cache(conn)
-        if data is None:
-            try:
-                data = _build_feed()
-            except Exception as exc:  # noqa: BLE001 —— 资讯失败绝不向上抛
-                logger.warning("资讯抓取异常: %s", exc)
-                data = {
-                    "available": False,
-                    "items": [],
-                    "counts": {"all": 0},
-                    "sources": [],
-                    "cached_at": _now(),
-                    "message": "资讯暂不可用",
-                    "errors": [type(exc).__name__],
-                    "source_note": config.NEWS_SOURCE_NOTE,
-                    "categories": [{"key": k, "label": v} for k, v in config.NEWS_CATEGORIES],
-                    "disclaimer": config.DISCLAIMER,
-                }
-            if data.get("available"):
-                conn.execute(
-                    "INSERT INTO meta(key, value) VALUES(?, ?) "
-                    "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
-                    (config.NEWS_CACHE_KEY, json.dumps(data, ensure_ascii=False)),
-                )
+        data = _load_or_build(conn)
 
     items = data.get("items") or []
     if category and category != "all":
