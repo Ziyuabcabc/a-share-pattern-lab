@@ -829,7 +829,117 @@ body[data-lang="en"] td.ind-cell {
 }
 .rep-frame-msg[hidden] { display: none; }
 
-/* 规则设置（占位页） */
+/* 规则设置：打分权重可视化配置（v1.9.0）
+   两侧校验条（总分 / 模块上限）+ 三组指标行（名称 / 滑块 / 当前分值 / 默认值）。 */
+.pill-custom { background: var(--accent-soft); color: var(--accent); }
+.pill-custom[hidden] { display: none; }
+
+.sum-bar {
+  display: flex; align-items: center; gap: var(--gap-sm); flex-wrap: wrap;
+  padding: 13px 16px; margin-bottom: 13px;
+  background: var(--card-soft);
+  border: 1px solid var(--border-soft);
+  border-radius: var(--radius-sm);
+}
+.sum-main { display: flex; align-items: baseline; gap: 4px; flex: none; }
+.sum-num {
+  font-size: var(--fs-metric); font-weight: 600; line-height: 1;
+  color: var(--accent); font-variant-numeric: tabular-nums;
+}
+.sum-num.is-off { color: var(--warn); }
+.sum-slash { font-size: var(--fs-body); color: var(--faint); }
+.sum-label { font-size: var(--fs-small); color: var(--muted); margin-left: 5px; }
+.sum-mods { display: flex; align-items: center; gap: 7px; flex-wrap: wrap; flex: 1; }
+.sum-mod {
+  display: inline-flex; align-items: baseline; gap: 6px;
+  font-size: var(--fs-small); color: var(--text-2);
+  background: var(--card); border: 1px solid var(--border-soft);
+  border-radius: var(--radius-pill); padding: 5px 11px;
+}
+.sum-mod-name { color: var(--muted); }
+.sum-mod-val { font-weight: 600; font-variant-numeric: tabular-nums; }
+.sum-mod-d { color: var(--faint); }
+.sum-mod.is-custom { background: var(--accent-soft); border-color: var(--accent-line); }
+.sum-mod.is-custom .sum-mod-val { color: var(--accent); }
+.sum-bar .pill { margin-left: auto; }
+
+.set-warn {
+  font-size: var(--fs-small); line-height: 1.7;
+  color: #96682c; background: var(--warn-soft);
+  border: 1px solid #f1e2c9; border-radius: var(--radius-sm);
+  padding: 9px 13px; margin-bottom: 13px;
+}
+.set-warn[hidden] { display: none; }
+
+.wgroups { display: flex; flex-direction: column; gap: var(--gap-sm); }
+.wgroup {
+  border: 1px solid var(--border-soft); border-radius: var(--radius-sm);
+  background: var(--card-soft); overflow: hidden;
+}
+.wgroup-head {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--gap-xs); padding: 11px 16px;
+  background: var(--card); border-bottom: 1px solid var(--border-soft);
+}
+.wgroup-head h3 { font-size: var(--fs-h3); font-weight: 600; }
+.wgroup-cap { font-size: var(--fs-small); color: var(--muted); font-variant-numeric: tabular-nums; }
+.wgroup-cap.is-custom { color: var(--accent); font-weight: 600; }
+
+.wrow {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 200px 56px 82px;
+  align-items: center; gap: var(--gap-sm);
+  padding: 9px 16px; border-bottom: 1px solid var(--border-soft);
+}
+.wrow:last-child { border-bottom: none; }
+.wrow.is-custom { background: var(--accent-hover); }
+.wrow-name { font-size: var(--fs-body); color: var(--text-2); overflow-wrap: anywhere; }
+.wrow.is-custom .wrow-name { color: var(--text); font-weight: 600; }
+.wrow-val {
+  font-size: var(--fs-h3); font-weight: 600; text-align: right;
+  color: var(--text); font-variant-numeric: tabular-nums;
+}
+.wrow.is-custom .wrow-val { color: var(--accent); }
+.wrow-dflt { font-size: var(--fs-small); color: var(--faint); text-align: right; white-space: nowrap; }
+[data-lang="en"] .wrow { grid-template-columns: minmax(0, 1fr) 170px 50px 76px; }
+
+/* 分值滑块：细轨 + 圆形滑块，与整体低饱和蓝强调色一致。
+   已填充部分由脚本写入的 linear-gradient 背景体现（左侧强调色到当前值）：
+   背景条固定 4px 高、垂直居中，因此输入框本身保持 18px 的舒适点按区域。
+   轨道本体透明，避免与填充色叠加。 */
+.wrange {
+  -webkit-appearance: none; appearance: none;
+  width: 100%; height: 18px; cursor: pointer;
+  background-repeat: no-repeat;
+  background-position: left center;
+  background-size: 100% 4px;
+  background-image: linear-gradient(to right, #e5e9f0 0, #e5e9f0 100%);
+}
+.wrange:focus-visible { outline: 2px solid var(--accent-line); outline-offset: 3px; border-radius: 4px; }
+.wrange::-webkit-slider-runnable-track { height: 18px; background: transparent; }
+.wrange::-webkit-slider-thumb {
+  -webkit-appearance: none; appearance: none;
+  width: 15px; height: 15px; margin-top: 1.5px; border-radius: 50%;
+  background: #fff; border: 2px solid var(--accent);
+  box-shadow: 0 1px 3px rgba(20, 26, 38, .18);
+  transition: transform .1s ease;
+}
+.wrange:hover::-webkit-slider-thumb { transform: scale(1.08); }
+.wrange:active::-webkit-slider-thumb { transform: scale(1.16); }
+.wrange::-moz-range-track { height: 4px; border-radius: 999px; background: #e5e9f0; }
+.wrange::-moz-range-thumb {
+  width: 11px; height: 11px; border-radius: 50%; background: #fff;
+  border: 2px solid var(--accent); box-shadow: 0 1px 3px rgba(20, 26, 38, .18);
+}
+
+.wfoot {
+  display: flex; align-items: center; justify-content: space-between;
+  gap: var(--gap-sm); flex-wrap: wrap;
+  margin-top: 16px; padding-top: 14px;
+  border-top: 1px solid var(--border-soft);
+}
+
+/* 其他配置（占位） */
 .set-note {
   font-size: var(--fs-small); color: var(--muted);
   line-height: 1.75; margin-bottom: 14px;
@@ -886,4 +996,14 @@ body[data-lang="en"] td.ind-cell {
   .drawer { width: 100vw; }
   .news-item { grid-template-columns: 56px minmax(0, 1fr); row-gap: 4px; }
   .news-src, .news-time { text-align: left; }
+  /* 权重行在窄屏折成两行：第一行名称 / 当前分值 / 默认值，第二行整宽滑块 */
+  [data-lang] .wrow {
+    grid-template-columns: minmax(0, 1fr) auto auto;
+    row-gap: 3px; padding-top: 11px; padding-bottom: 11px;
+  }
+  .wrow-name { grid-column: 1; grid-row: 1; }
+  .wrow-val { grid-column: 2; grid-row: 1; }
+  .wrow-dflt { grid-column: 3; grid-row: 1; }
+  .wrange { grid-column: 1 / -1; grid-row: 2; }
+  .sum-main { flex: 1; }
 }

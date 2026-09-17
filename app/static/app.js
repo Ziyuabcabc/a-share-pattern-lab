@@ -2,8 +2,10 @@
    A股历史形态匹配研究看板 · 前端逻辑（本地运行版）
    数据来源：本地 FastAPI 接口（/api/*），全部为历史统计与指标展示。
    分数含义：与历史上升段启动样本的特征相似程度，不代表未来表现。
-   版本：v1.8.0（页面结构优化：单页长滚动 → 顶部导航标签页，纯前端布局调整，
-   打分逻辑、数据接口与各模块交互均保持不变；保留 v1.7.0 四项研究能力）
+   版本：v1.9.0（规则设置页：打分权重可视化配置。每项的命中标志位取自后端已算好的
+   breakdown，前端只按新权重做线性重算，因此不修改后端配置、不改变回测与简报的
+   计算口径，权重仅作用于本次浏览器会话内的候选池展示；v1.8.0 页面结构与
+   v1.7.0 四项研究能力均保持不变）
 
    双语实现约定：
    - 所有界面文案走 I18N.t()（语言包见 static/i18n.js），页面内不散落文案；
@@ -75,6 +77,16 @@ const state = {
   repFrameLoaded: false,
   repFrameKey: "",
 
+  /* v1.9.0 打分权重配置（规则设置页）
+     weights 为当前生效权重；weightsCustom 表示是否已偏离默认口径。
+     poolFull 是「全量候选池快照」，仅在用户真正改动权重后才惰性拉取：
+     分页（limit=200 / 加载更多）在后端模式下仍走接口，一旦进入自定义权重
+     模式，筛选、排序、分页全部在这份本地快照上完成，拖动滑块不再打接口。 */
+  weights: null,          // 初始化为 DEFAULT_WEIGHTS 的副本（见 WEIGHT_SPEC 段）
+  weightsCustom: false,   // 是否处于自定义权重口径
+  poolFull: null,         // { runId, serverRunId, items, stats }
+  poolFullPromise: null,  // 全量快照的在途请求（并发调用共享同一次拉取）
+
   /* v1.7.0 研究深度分析（四项，各自独立加载、互不阻塞） */
   industry: null,         // 分行业回测
   significance: null,     // Welch t 检验 + 分年度稳健性
@@ -124,6 +136,7 @@ document.addEventListener("DOMContentLoaded", () => {
   bindEvents();
   syncLangUI();
   syncStickyOffset();
+  renderWeightPanel();   // 规则设置页首屏即按默认口径渲染一次
   $("scanLog").textContent = t("scanLogIdle");
   refreshAll();
 });
@@ -138,6 +151,18 @@ function bindEvents() {
   $("btnScanStart").addEventListener("click", startScan);
   $("btnExport").addEventListener("click", exportCsv);
   $("btnRepInline").addEventListener("click", () => loadReportFrame(true));
+
+  /* 打分权重配置（v1.9.0）：滑块拖动过程中合并重算，松手（change）立即结算。
+     事件委托在容器上，因为分组行是脚本渲染的、会随语言切换整体重建。 */
+  $("wGroups").addEventListener("input", (e) => {
+    const el = e.target;
+    if (el && el.classList.contains("wrange")) onWeightInput(el.dataset.id, el.value);
+  });
+  $("wGroups").addEventListener("change", (e) => {
+    const el = e.target;
+    if (el && el.classList.contains("wrange")) scheduleWeightsApply(true);
+  });
+  $("btnWeightReset").addEventListener("click", resetWeights);
 
   // 顶部导航标签页（v1.8.0）：纯前端切换
   initTabs();
@@ -221,6 +246,14 @@ function switchTab(name, opts) {
   redrawTabCharts(tab);
   // 简报预览惰性加载：只有真正进入该页（或批次变化）才请求简报全文
   if (tab === "report") loadReportFrame();
+  // 权重数字可能已被改动或被语言切换影响，进入本页时按 state 重绘一次
+  if (tab === "settings") {
+    renderWeightPanel();
+    // 进入本页即后台预取全量候选池快照：这样真正拖动滑块时是纯本地重算，
+    // 一次请求都不发（快照只在读已算好的结果，不含任何重算 / 扫描）。
+    // 若用户在预取完成前就拖动，applyWeights 会复用同一个在途请求。
+    prefetchPoolFull();
+  }
 
   if (!o.silent) {
     const want = `#${tab}`;
@@ -294,6 +327,7 @@ function rerenderAll() {
   renderMacro();
   renderStatus();
   renderFilters();
+  renderWeightPanel();
   renderTable();
   drawIndustryChart();
   renderNewsTabs();
@@ -412,6 +446,8 @@ async function loadStatus() {
     state.runInfo = s.latest_run || null;
     state.runId = s.latest_run ? s.latest_run.id : null;
     renderStatus();
+    // 直链进设置页时首屏还没拿到批次，拿到后补一次快照预取
+    if (state.tab === "settings") prefetchPoolFull();
   } catch {
     $("statStrip").innerHTML = "";
   }
@@ -436,13 +472,18 @@ function renderStatus() {
     pill.className = "pill pill-muted";
   }
 
+  /* 自定义权重口径下，候选数 / 高匹配分 / 中匹配分按新分档在本地重算
+     （阈值仍沿用后端口径 60 / 30）；预筛后处理量属于扫描阶段指标，
+     与权重无关，始终取后端批次结果。 */
+  const local = weightsActive() ? state.poolFull.stats : null;
+  const customSub = local ? t("statCustomSub") : null;
   const stats = [
-    { num: run ? run.candidates : "--", label: t("statTotal"), tier: "tier-total",
-      sub: t("statTotalSub") },
-    { num: run ? run.high_count : "--", label: t("statHigh"), tier: "tier-high",
-      sub: t("statHighSub") },
-    { num: run ? run.mid_count : "--", label: t("statMid"), tier: "tier-mid",
-      sub: t("statMidSub") },
+    { num: local ? local.total : (run ? run.candidates : "--"), label: t("statTotal"),
+      tier: "tier-total", sub: customSub || t("statTotalSub") },
+    { num: local ? local.high : (run ? run.high_count : "--"), label: t("statHigh"),
+      tier: "tier-high", sub: customSub || t("statHighSub") },
+    { num: local ? local.mid : (run ? run.mid_count : "--"), label: t("statMid"),
+      tier: "tier-mid", sub: customSub || t("statMidSub") },
     { num: run ? run.total_scanned : "--", label: t("statProcessed"), tier: "tier-processed",
       sub: t("statProcessedSub") },
   ];
@@ -489,6 +530,368 @@ function renderFilters() {
 }
 
 /* =========================================================================
+   打分权重配置（v1.9.0）
+
+   设计要点：
+   1. 与后端 app/scoring.py 的 v1.1 引擎逐项同构——每一项对应引擎里的一个
+      命中条件，dflt 与该条件的原始分值一致（有测试按 config 常量逐项锁定）。
+   2. 命中与否全部读后端已算好的 breakdown 标志位，前端不做任何新的判定，
+      因此权重只改变「各命中项的票面分值」，不引入任何新逻辑。
+   3. 总分 = Σ(命中标志 × 该权重)，与后端在默认权重下逐股严格相等。
+   4. 两个叠加 / 互斥点在注释中标明，改动时必须与后端同步。
+   ========================================================================= */
+const WEIGHT_SPEC = [
+  {
+    key: "core", name: "groupCore", ref: 50,
+    items: [
+      { id: "macd", dflt: 15, label: "itemMacd", hit: (b) => b.core && b.core.macd_gold_red },
+      { id: "kdj", dflt: 12, label: "itemKdj", hit: (b) => b.core && b.core.kdj_gold_j_under_100 },
+      { id: "vol13", dflt: 8, label: "itemVol13", hit: (b) => b.core && b.core.volume_surge_1_3x },
+      { id: "vol2", dflt: 5, label: "itemVol2", hit: (b) => b.core && b.core.volume_surge_2x },
+      { id: "turnover", dflt: 5, label: "itemTurnover", hit: (b) => b.core && b.core.turnover_healthy_3_15 },
+      { id: "range", dflt: 5, label: "itemRange", hit: (b) => b.core && b.core.range_compact_40d },
+    ],
+  },
+  {
+    key: "fund", name: "groupFund", ref: 20,
+    items: [
+      /* 叠加点：后端里 >20% 走的是「基础分 + 叠加分」（3 + 5），<=18% 只拿基础分，
+         两支互斥。这里如实建模：chipBase 只对 <=18% 命中；chipLoose 命中时
+         通过 extra 把基础分一并计入，因此二者不会同时计分。 */
+      { id: "chipBase", dflt: 3, label: "itemChipLow", exclusive: "chip",
+        hit: (b) => !!b.fund && !!b.fund.chip_concentrated_le_18 },
+      { id: "chipLoose", dflt: 5, label: "itemChipLoose", exclusive: "chip",
+        extra: ["chipBase"],
+        hit: (b) => !!b.fund && !!b.fund.chip_loose_gt_20 },
+      /* 互斥点：后端 PE 分位是 if/elif，两档不可能同时命中 */
+      { id: "peLow", dflt: 6, labelKey: "itemPeLow", exclusive: "peTier",
+        hit: (b) => !!b.fund && b.fund.pe_tier === "low" },
+      { id: "peMid", dflt: 3, labelKey: "itemPeMid", exclusive: "peTier",
+        hit: (b) => !!b.fund && b.fund.pe_tier === "mid" },
+      { id: "return5", dflt: 6, label: "itemReturn5",
+        hit: (b) => !!b.fund && !!b.fund.return5_healthy_5_20 },
+    ],
+  },
+  {
+    key: "industry", name: "groupInd", ref: 30,
+    items: [
+      { id: "growth", dflt: 8, label: "itemGrowthBoard",
+        hit: (b) => !!b.industry && !!b.industry.growth_board },
+      { id: "hot", dflt: 22, label: "itemHotIndustry",
+        hit: (b) => !!b.industry && !!b.industry.hot_industry },
+    ],
+  },
+];
+
+/* 单个命中项实际计入的分值 = 自身权重 + extra 里列出的附加项权重
+   （筹码集中度 >20% 时后端等于「基础分 3 + 叠加分 5」，与之一致） */
+function wEffPts(it, w) {
+  let v = Number(w[it.id]) || 0;
+  for (const k of it.extra || []) v += Number(w[k]) || 0;
+  return v;
+}
+
+/* 默认权重（= 后端 v1.1 原始分值），作为校验基准，禁止被就地修改 */
+const DEFAULT_WEIGHTS = Object.freeze(
+  WEIGHT_SPEC.reduce((acc, g) => {
+    for (const it of g.items) acc[it.id] = it.dflt;
+    return acc;
+  }, {})
+);
+const WEIGHT_REF_TOTAL = 100;
+state.weights = Object.assign({}, DEFAULT_WEIGHTS);
+
+/* 指标 id → 指标定义（滑块进度填充、按 id 查默认值都用它） */
+const WEIGHT_ITEM = {};
+for (const g of WEIGHT_SPEC) for (const it of g.items) WEIGHT_ITEM[it.id] = it;
+
+/* 该项的可调上界：0 ~ 2 × 默认分值，步长 1——贴合原始分值尺度，便于精确调整 */
+const wMaxOf = (it) => Math.max(it.dflt * 2, 1);
+const wLabelOf = (it) => t(it.labelKey || it.label);
+
+function isDefaultWeights() {
+  return Object.keys(DEFAULT_WEIGHTS).every((k) => state.weights[k] === DEFAULT_WEIGHTS[k]);
+}
+
+/* 按给定权重对单只个股重算总分：命中标志取自 breakdown，前端不做判定 */
+function scoreWithWeights(bd, w) {
+  const groups = {};
+  let total = 0;
+  for (const g of WEIGHT_SPEC) {
+    let s = 0;
+    for (const it of g.items) {
+      if (it.hit(bd)) s += wEffPts(it, w);
+    }
+    groups[g.key] = s;
+    total += s;
+  }
+  return { total, groups };
+}
+
+/* 模块分值上限：互斥项按「取最大」计，其余相加。
+   默认权重下三个模块分别回到 50 / 20 / 30，合计 100（测试逐项锁定）。 */
+function moduleCap(group, w) {
+  const excl = {};
+  let sum = 0;
+  for (const it of group.items) {
+    const v = wEffPts(it, w);
+    if (it.exclusive) excl[it.exclusive] = Math.max(excl[it.exclusive] || 0, v);
+    else sum += v;
+  }
+  for (const k of Object.keys(excl)) sum += excl[k];
+  return sum;
+}
+
+const totalCap = (w) => WEIGHT_SPEC.reduce((a, g) => a + moduleCap(g, w), 0);
+
+/* 自定义权重是否正在作用于候选池（快照必须是当前批次的） */
+const hasPoolFull = () => !!state.poolFull && state.poolFull.runId === state.runId;
+const weightsActive = () => state.weightsCustom && hasPoolFull();
+
+/* ---- 规则设置页渲染 ---- */
+function weightRowHtml(it, w) {
+  const v = Number(w[it.id]) || 0;
+  const label = wLabelOf(it);
+  return `
+    <div class="wrow${v !== it.dflt ? " is-custom" : ""}" data-id="${it.id}">
+      <div class="wrow-name" title="${esc(label)}">${esc(label)}</div>
+      <input class="wrange" type="range" min="0" max="${wMaxOf(it)}" step="1"
+             value="${v}" data-id="${it.id}" aria-label="${esc(label)}">
+      <output class="wrow-val" id="wVal-${it.id}">${v}</output>
+      <span class="wrow-dflt">${esc(t("setDflt", { n: it.dflt }))}</span>
+    </div>`;
+}
+
+function renderWeightPanel() {
+  const w = state.weights;
+  $("wGroups").innerHTML = WEIGHT_SPEC.map((g) => `
+    <section class="wgroup" data-group="${g.key}">
+      <div class="wgroup-head">
+        <h3>${esc(t(g.name))}</h3>
+        <span class="wgroup-cap"></span>
+      </div>
+      ${g.items.map((it) => weightRowHtml(it, w)).join("")}
+    </section>`).join("");
+  updateWeightReadouts();
+}
+
+/* 滑块已填充进度：左侧强调色铺到当前值，右侧保持轨道底色。
+   用背景渐变而不是额外 DOM，避免拖动时重排。 */
+function paintRange(id) {
+  const it = WEIGHT_ITEM[id];
+  const el = document.querySelector(`.wrange[data-id="${id}"]`);
+  if (!it || !el) return;
+  const max = wMaxOf(it);
+  const v = Number(el.value) || 0;
+  const pct = max > 0 ? Math.max(0, Math.min(100, (v / max) * 100)) : 0;
+  el.style.backgroundImage =
+    `linear-gradient(to right, var(--accent) 0, var(--accent) ${pct}%,`
+    + ` #e5e9f0 ${pct}%, #e5e9f0 100%)`;
+}
+
+/* 只更新数字与校验条，不重建滑块 DOM（拖动过程中重建会打断拖拽） */
+function updateWeightReadouts() {
+  const w = state.weights;
+  for (const g of WEIGHT_SPEC) {
+    for (const it of g.items) {
+      const v = Number(w[it.id]) || 0;
+      const out = $("wVal-" + it.id);
+      if (!out) continue;
+      out.textContent = String(v);
+      const row = out.closest(".wrow");
+      if (row) row.classList.toggle("is-custom", v !== it.dflt);
+      paintRange(it.id);
+    }
+    const head = document.querySelector(`.wgroup[data-group="${g.key}"] .wgroup-cap`);
+    if (head) {
+      const cap = moduleCap(g, w);
+      // 与默认口径一致时只说上限，不一致时补一个参考值，避免「上限 X / 参考 X」的冗余
+      head.textContent = cap === g.ref
+        ? t("setCapSame", { n: cap })
+        : t("setCapLine", { n: cap, ref: g.ref });
+      head.classList.toggle("is-custom", cap !== g.ref);
+    }
+  }
+
+  const total = totalCap(w);
+  const off = total !== WEIGHT_REF_TOTAL;
+  $("sumBar").innerHTML =
+    `<div class="sum-main">
+       <span class="sum-num${off ? " is-off" : ""}">${total}</span>
+       <span class="sum-slash">/ ${WEIGHT_REF_TOTAL}</span>
+       <span class="sum-label">${esc(t("setSumLabel"))}</span>
+     </div>
+     <div class="sum-mods">${WEIGHT_SPEC.map((g) => {
+       const cap = moduleCap(g, w);
+       const custom = cap !== moduleCap(g, DEFAULT_WEIGHTS);
+       return `<span class="sum-mod${custom ? " is-custom" : ""}">`
+         + `<span class="sum-mod-name">${esc(t(g.name))}</span>`
+         + `<span class="sum-mod-val">${cap}</span>`
+         + `<span class="sum-mod-d">/${g.ref}</span></span>`;
+     }).join("")}</div>`;
+
+  const warn = $("sumWarn");
+  warn.hidden = !off;
+  if (off) warn.textContent = t("setWarnOff", { n: total });
+
+  const st = $("sumState");
+  st.textContent = t(state.weightsCustom ? "setStateCustom" : "setStateDefault");
+  st.className = `pill ${state.weightsCustom ? "pill-custom" : "pill-muted"}`;
+
+  $("btnWeightReset").disabled = !state.weightsCustom;
+  $("wFootHint").textContent = state.weightsCustom
+    ? t("setFootCustom", { n: hasPoolFull() ? state.poolFull.items.length : 0 })
+    : t("setFootDefault");
+}
+
+function onWeightInput(id, value) {
+  if (!(id in DEFAULT_WEIGHTS)) return;
+  state.weights[id] = Math.max(0, Math.round(Number(value) || 0));
+  state.weightsCustom = !isDefaultWeights();
+  updateWeightReadouts();
+  scheduleWeightsApply(false);
+}
+
+/* 拖动中 160ms 合并一次重算，松手（change）立即结算 */
+let weightApplyTimer = null;
+function scheduleWeightsApply(immediate) {
+  if (weightApplyTimer) {
+    clearTimeout(weightApplyTimer);
+    weightApplyTimer = null;
+  }
+  if (immediate) {
+    applyWeights();
+    return;
+  }
+  weightApplyTimer = setTimeout(() => {
+    weightApplyTimer = null;
+    applyWeights();
+  }, 160);
+}
+
+/* 全量候选池快照：分块拉取（接口单次上限 2000），只在首次改权重时执行一次 */
+async function ensurePoolFull() {
+  if (hasPoolFull()) return state.poolFull.items;
+  if (state.poolFullPromise) return state.poolFullPromise;
+  const task = (async () => {
+    const CHUNK = 2000;
+    const items = [];
+    let serverRunId = state.runId;
+    for (let off = 0; ; off += CHUNK) {
+      const qs = new URLSearchParams({ limit: String(CHUNK), offset: String(off) });
+      if (state.runId) qs.set("run_id", state.runId);
+      const d = await get(`/api/pool/?${qs}`);
+      if (d.run_id !== undefined && d.run_id !== null) serverRunId = d.run_id;
+      const batch = d.items || [];
+      items.push(...batch);
+      if (!batch.length || items.length >= (d.total || 0)) break;
+    }
+    state.poolFull = { runId: state.runId, serverRunId, items, stats: null };
+    return items;
+  })();
+  state.poolFullPromise = task;
+  try {
+    return await task;
+  } finally {
+    state.poolFullPromise = null;
+  }
+}
+
+/* 进入规则设置页时的后台预取：失败不提示（applyWeights 会再试并给出提示），
+   目的是让「拖动滑块」这一步真正做到零请求。 */
+function prefetchPoolFull() {
+  // 批次未知时先不取：否则快照会挂在一个未知批次上，进了候选池还要重取一次
+  if (state.runId == null) return;
+  if (hasPoolFull() || state.poolFullPromise) return;
+  ensurePoolFull().catch(() => { /* 静默：真正需要时由 applyWeights 兜底 */ });
+}
+
+/* 本地统计：分档阈值沿用后端口径（高 >= 60 / 中 30-59） */
+function recomputeLocalStats() {
+  let high = 0;
+  let mid = 0;
+  for (const x of state.poolFull.items) {
+    const s = scoreWithWeights(x.breakdown || {}, state.weights).total;
+    if (s >= 60) high += 1;
+    else if (s >= 30) mid += 1;
+  }
+  state.poolFull.stats = { total: state.poolFull.items.length, high, mid };
+}
+
+/* 自定义权重下的候选池视图：筛选、按新分值排序，全部在本地完成 */
+function poolViewItems() {
+  const w = state.weights;
+  const board = $("fBoard").value;
+  const industry = $("fIndustry").value;
+  const minScore = Number($("fMinScore").value || 0);
+  const asc = $("fOrder").value === "asc";
+  const kw = $("fSearch").value.trim().toLowerCase();
+  const out = [];
+  for (const x of state.poolFull.items) {
+    if (board && x.board !== board) continue;
+    if (industry && x.industry !== industry) continue;
+    if (kw) {
+      const hay = [x.code, x.name, I18N.industry(x.industry), I18N.board(x.board)]
+        .filter(Boolean).join(" ").toLowerCase();
+      if (!hay.includes(kw)) continue;
+    }
+    const s = scoreWithWeights(x.breakdown || {}, w).total;
+    if (minScore && s < minScore) continue;
+    out.push({ x, s });
+  }
+  out.sort((a, b) => (asc ? a.s - b.s : b.s - a.s));
+  return out;
+}
+
+function renderPoolLocal(append) {
+  const view = poolViewItems();
+  // 重排序后原分页位置已无意义，回到第一页（否则「加载更多」会跳过中间一段）
+  if (!append) state.offset = 0;
+  const shown = Math.min(state.offset + state.limit, view.length);
+  state.total = view.length;
+  state.items = view.slice(0, shown)
+    .map((r) => Object.assign({}, r.x, { local_score: r.s }));
+  renderTable();
+}
+
+/* 应用当前权重到候选池：首次需要把全量快照拉下来，之后纯本地重算 */
+async function applyWeights() {
+  if (!state.weightsCustom) return;
+  if (!hasPoolFull()) {
+    $("wFootHint").textContent = t("setLoading");
+    try {
+      await ensurePoolFull();
+    } catch {
+      $("wFootHint").textContent = t("setLoadFail");
+      return;
+    }
+  }
+  // 每次改动都要重算分档：快照可能已在进入本页时预取好（此时上面的分支被跳过），
+  // 若只在「首次拉取」时算一次，统计卡会一直停留在上一组权重的分档结果。
+  // 单次遍历约 5 千条，开销可忽略。
+  recomputeLocalStats();
+  renderPoolLocal(false);
+  renderStatus();
+  updateWeightReadouts();
+  // 抽屉若正开着，同步按新权重重绘总分与明细，避免与表格口径不一致
+  if (state.detailPayload && $("drawer").classList.contains("show")) renderDrawerAll();
+}
+
+/* 恢复默认权重：回到后端原始口径（列表、统计卡一律以服务端结果为准） */
+async function resetWeights() {
+  state.weights = Object.assign({}, DEFAULT_WEIGHTS);
+  state.weightsCustom = false;
+  if (weightApplyTimer) {
+    clearTimeout(weightApplyTimer);
+    weightApplyTimer = null;
+  }
+  renderWeightPanel();
+  state.offset = 0;
+  await loadPool();
+  renderStatus();
+}
+
+/* =========================================================================
    候选池表格
    ========================================================================= */
 /* 指标命中项：表格标签与抽屉明细共用同一份定义，保证口径一致。
@@ -524,6 +927,17 @@ function applyPoolCols() {
 }
 
 async function loadPool(append = false) {
+  /* 自定义权重口径下，筛选 / 排序 / 分页全部在本地全量快照上完成，
+     这里不再打接口；默认口径仍走后端分页，行为与改造前完全一致。 */
+  if (state.weightsCustom) {
+    if (append && hasPoolFull()) {
+      renderPoolLocal(true);
+      return;
+    }
+    await applyWeights();
+    return;
+  }
+
   const params = new URLSearchParams();
   if (state.runId) params.set("run_id", state.runId);
   if ($("fBoard").value) params.set("board", $("fBoard").value);
@@ -563,7 +977,10 @@ function renderTable() {
     : t("poolEmptyScan");
 
   $("poolBody").innerHTML = rows.map((x) => {
-    const score = x.total_score ?? 0;
+    // local_score 仅在自定义权重口径下存在；默认口径沿用后端原始分值
+    const score = x.local_score ?? x.total_score ?? 0;
+    // 自定义权重下总分可能超出名义满分，进度条按 0-100 截断，数字如实展示
+    const barW = Math.max(0, Math.min(100, score));
     const bd = x.breakdown || {};
     const d = x.display || {};
     const m = x.metrics || {};
@@ -585,7 +1002,7 @@ function renderTable() {
         <td class="ind-cell" title="${esc(I18N.industry(x.industry) || "")}">${esc(I18N.industry(x.industry)) || "--"}</td>
         <td class="num">
           <div class="score-cell">
-            <div class="score-bar"><i style="width:${score}%"></i></div>
+            <div class="score-bar"><i style="width:${barW}%"></i></div>
             <span class="score-num">${score}</span>
           </div>
         </td>
@@ -600,9 +1017,15 @@ function renderTable() {
       </tr>`;
   }).join("");
 
-  $("poolCount").textContent =
-    t("poolCount", { total: state.total, shown: rows.length });
+  const custom = weightsActive();
+  $("poolCount").textContent = custom
+    ? t("poolCountCustom", { total: state.total, shown: rows.length })
+    : t("poolCount", { total: state.total, shown: rows.length });
   $("btnMore").hidden = state.items.length >= state.total;
+  // 口径提示：自定义权重时在卡片标题与筛选栏同时标注，避免与后端口径混淆
+  const pill = $("poolCustomPill");
+  if (pill) pill.hidden = !custom;
+  $("poolSub").textContent = custom ? t("poolSubCustom") : t("poolSub");
 
   for (const tr of $("poolBody").querySelectorAll("tr")) {
     tr.addEventListener("click", () => openDrawer(tr.dataset.code));
@@ -929,44 +1352,52 @@ const PE_TIER_KEY = {
   high: "peTierHigh", missing: "peTierMissing",
 };
 
-/* 三组得分明细定义：与打分引擎 v1.1 逐项对应，含每项分值 */
-function buildScoreGroups(bd) {
+/* 三组得分明细定义：与打分引擎 v1.1 逐项对应。
+   各项分值改为读当前权重（默认权重下与原始分值逐项相同，有测试锁定），
+   因此规则设置页调整权重后，抽屉里的明细会同步变化；模块上限也随权重走。 */
+function buildScoreGroups(bd, w) {
+  const W = w || state.weights;
   const core = bd.core || {};
   const fund = bd.fund || {};
   const ind = bd.industry || {};
   const tier = fund.pe_tier || "missing";
   const peHit = tier === "low" || tier === "mid";
-  const pePts = tier === "low" ? 6 : tier === "mid" ? 3 : 0;
+  const pePts = tier === "low" ? W.peLow : tier === "mid" ? W.peMid : 0;
+  const capOf = (key) => moduleCap(WEIGHT_SPEC.find((g) => g.key === key), W);
+  const local = weightsActive() ? scoreWithWeights(bd, W) : null;
+  const sub = (key, fallback) => (local ? local.groups[key] : (bd[fallback] ?? 0));
   return [
     {
       key: "core", cls: "g-core", title: t("groupCore"),
-      score: bd.core_score ?? 0, max: 50,
+      score: sub("core", "core_score"), max: capOf("core"),
       items: [
-        { name: t("itemMacd"), pts: 15, hit: !!core.macd_gold_red },
-        { name: t("itemKdj"), pts: 12, hit: !!core.kdj_gold_j_under_100 },
-        { name: t("itemVol13"), pts: 8, hit: !!core.volume_surge_1_3x },
-        { name: t("itemVol2"), pts: 5, hit: !!core.volume_surge_2x },
-        { name: t("itemTurnover"), pts: 5, hit: !!core.turnover_healthy_3_15 },
-        { name: t("itemRange"), pts: 5, hit: !!core.range_compact_40d },
+        { name: t("itemMacd"), pts: W.macd, hit: !!core.macd_gold_red },
+        { name: t("itemKdj"), pts: W.kdj, hit: !!core.kdj_gold_j_under_100 },
+        { name: t("itemVol13"), pts: W.vol13, hit: !!core.volume_surge_1_3x },
+        { name: t("itemVol2"), pts: W.vol2, hit: !!core.volume_surge_2x },
+        { name: t("itemTurnover"), pts: W.turnover, hit: !!core.turnover_healthy_3_15 },
+        { name: t("itemRange"), pts: W.range, hit: !!core.range_compact_40d },
       ],
     },
     {
       key: "fund", cls: "g-fund", title: t("groupFund"),
-      score: bd.fund_score ?? 0, max: 20,
+      score: sub("fund", "fund_score"), max: capOf("fund"),
       items: [
-        { name: t("itemChipLow"), pts: 3, hit: !!fund.chip_concentrated_le_18 },
-        { name: t("itemChipLoose"), pts: 5, hit: !!fund.chip_loose_gt_20 },
+        /* >20% 一支在后端等于「基础分 + 叠加分」，因此这里显示的也是合计值 */
+        { name: t("itemChipLow"), pts: W.chipBase, hit: !!fund.chip_concentrated_le_18 },
+        { name: t("itemChipLoose"), pts: W.chipBase + W.chipLoose,
+          hit: !!fund.chip_loose_gt_20 },
         { name: t("itemPe", { tier: t(PE_TIER_KEY[tier] || "peTierMissing") }),
-          pts: pePts, max: 6, hit: peHit },
-        { name: t("itemReturn5"), pts: 6, hit: !!fund.return5_healthy_5_20 },
+          pts: pePts, max: Math.max(W.peLow, W.peMid), hit: peHit },
+        { name: t("itemReturn5"), pts: W.return5, hit: !!fund.return5_healthy_5_20 },
       ],
     },
     {
       key: "industry", cls: "g-ind", title: t("groupInd"),
-      score: bd.industry_score ?? 0, max: 30,
+      score: sub("industry", "industry_score"), max: capOf("industry"),
       items: [
-        { name: t("itemGrowthBoard"), pts: 8, hit: !!ind.growth_board },
-        { name: t("itemHotIndustry"), pts: 22, hit: !!ind.hot_industry },
+        { name: t("itemGrowthBoard"), pts: W.growth, hit: !!ind.growth_board },
+        { name: t("itemHotIndustry"), pts: W.hot, hit: !!ind.hot_industry },
       ],
     },
   ];
@@ -1031,7 +1462,11 @@ function renderDetailHeader(profile, score, detail) {
   if (name) $("dTitle").textContent = `${name} · ${code}`;
 
   const bd = score.breakdown || {};
-  const total = score.total_score ?? bd.total_score ?? 0;
+  /* 自定义权重口径下，抽屉的总分与明细按当前权重本地重算，与候选池保持一致；
+     默认口径仍直接用后端返回的原始分值。 */
+  const total = weightsActive() && score.breakdown
+    ? scoreWithWeights(bd, state.weights).total
+    : (score.total_score ?? bd.total_score ?? 0);
   // 板块 / 行业按当前语言展示（接口返回的始终是中文原名）
   const meta = [I18N.board(profile.board), I18N.industry(profile.industry)]
     .filter(Boolean).join(" · ");
@@ -1041,9 +1476,11 @@ function renderDetailHeader(profile, score, detail) {
     : `${meta} · ${t("drawerNotInPool")}`;
 
   const groups = buildScoreGroups(bd);
+  // 满分分母随当前权重走：默认口径即 100，自定义口径显示该配置的理论上限
+  const capNow = weightsActive() ? totalCap(state.weights) : WEIGHT_REF_TOTAL;
   $("dHero").innerHTML = `
     <div class="hero-top">
-      <span class="hero-num">${total}<small>/100</small></span>
+      <span class="hero-num">${total}<small>/${capNow}</small></span>
       <span class="hero-label">${esc(t("drawerScore"))}</span>
     </div>
     <div class="hero-bar"><i style="width:${Math.max(0, Math.min(100, total))}%"></i></div>

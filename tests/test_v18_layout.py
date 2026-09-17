@@ -280,13 +280,14 @@ def test_report_frame_guard_survives_null_run_id(app_js):
     assert body.index("state.repFrameLoaded = true") < body.index("frame.src =")
 
 
-def test_settings_page_is_a_meaningful_placeholder(html):
-    """占位页要交代现行口径，而不是空洞的“敬请期待”。"""
+def test_settings_page_still_documents_pending_conventions(html):
+    """v1.9.0 起权重部分已是可用配置，其余三项配置仍须交代现行口径而非空洞占位。"""
     assert 'id="panel-settings"' in html
     assert 'id="setGrid"' in html
     items = re.findall(r'data-i18n="(set(?:Weight|Thresh|Hot|Filter)T)"', html)
-    assert items == ["setWeightT", "setThreshT", "setHotT", "setFilterT"], items
-    for key in ("setWeightNow", "setThreshNow", "setHotNow", "setFilterNow"):
+    # 权重项已升级为真实配置界面的模块分组，不再是占位卡片
+    assert items == ["setThreshT", "setHotT", "setFilterT"], items
+    for key in ("setThreshNow", "setHotNow", "setFilterNow"):
         assert f'data-i18n="{key}"' in html, f"占位项缺少现行口径说明：{key}"
     assert 'data-i18n="setBadge"' in html
 
@@ -303,11 +304,16 @@ def test_tab_and_new_section_keys_exist_in_both_packs(html):
     new_keys = {f"tab{k}" for k in ("Pool", "Backtest", "Report", "Market", "Settings")}
     new_keys |= {"tabNavAria", "tabMenuBtn", "btnRepInline", "repFrameTitle",
                  "repFrameHint", "repFrameLoading", "repFrameFail",
-                 "setTitle", "setSub", "setBadge", "setNote", "setNowLabel",
-                 "setTagPlanned", "setWeightT", "setWeightD", "setWeightNow",
+                 "setTitle", "setSub", "setBadge", "setNowLabel",
+                 "setTagPlanned", "setOtherT", "setOtherD",
                  "setThreshT", "setThreshD", "setThreshNow",
                  "setHotT", "setHotD", "setHotNow",
                  "setFilterT", "setFilterD", "setFilterNow"}
+    # v1.9.0 权重配置新增词条
+    new_keys |= {"setSumLabel", "setStateDefault", "setStateCustom", "setCapLine",
+                 "setDflt", "setReset", "setLoading", "setLoadFail",
+                 "setFootDefault", "setFootCustom", "setWarnOff",
+                 "pillCustom", "poolSubCustom", "poolCountCustom", "statCustomSub"}
 
     missing_zh = sorted(k for k in new_keys if f"\n      {k}:" not in zh)
     missing_en = sorted(k for k in new_keys if f"\n      {k}:" not in en)

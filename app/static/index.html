@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>A 股历史形态匹配研究看板 · 本地运行版</title>
 <link rel="icon" href="data:,">
-<link rel="stylesheet" href="/static/app.css?v=1.8.0">
+<link rel="stylesheet" href="/static/app.css?v=1.9.0">
 </head>
 <body>
 
@@ -118,6 +118,8 @@
           <p class="card-sub" id="poolSub" data-i18n="poolSub">计分口径 v1.1：核心形态 0–50 + 筹码基本面 0–20 + 行业板块 0–30</p>
         </div>
         <div class="filters">
+          <!-- 自定义权重生效提示：仅当规则设置页调整过权重时出现 -->
+          <span class="pill pill-custom" id="poolCustomPill" hidden>自定义权重</span>
           <select id="fBoard">
             <option value="" data-i18n="filterAllBoards">全部板块</option>
           </select>
@@ -479,29 +481,47 @@
   </div>
 
   <!-- =====================================================================
-       标签页 5：规则设置（占位，预留后续权重配置类功能）
+       标签页 5：规则设置（打分权重可视化配置，v1.9.0）
+       权重调整只作用于本浏览器会话内的候选池展示：每项的命中标志位取自后端
+       已算好的 breakdown，前端只按新权重做线性重算，不修改后端配置，
+       也不改变历史回测与研究简报的计算口径。
        ===================================================================== -->
   <div class="tab-panel" id="panel-settings" role="tabpanel" aria-labelledby="tabBtn-settings" tabindex="0" hidden>
 
     <section class="card">
       <div class="card-head">
         <div class="card-title">
-          <h2 data-i18n="setTitle">规则设置</h2>
-          <p class="card-sub" data-i18n="setSub">打分规则与参数的配置入口；本版本仅梳理现行口径，界面化配置待后续版本开放</p>
+          <h2 data-i18n="setTitle">打分权重配置</h2>
+          <p class="card-sub" data-i18n="setSub">拖动滑块调整各指标分值，候选池的综合匹配分与排序即时本地重算</p>
         </div>
-        <span class="pill pill-muted" data-i18n="setBadge">待开放</span>
+        <span class="pill pill-muted" id="sumState">默认口径</span>
       </div>
       <div class="card-body">
-        <p class="set-note" data-i18n="setNote">下面列出的是当前生效的口径与维护位置。改动打分规则会影响历史可比性，因此需重新执行扫描（或对已缓存数据做离线重算）后才会生效。</p>
+        <!-- 当前配置总分（参考满分 100）与三个模块的分值上限，实时校验 -->
+        <div class="sum-bar" id="sumBar"></div>
+        <p class="set-warn" id="sumWarn" hidden></p>
+
+        <!-- 三大模块分组：每行 = 指标名称 + 分值滑块 + 当前分值 + 默认值标注 -->
+        <div class="wgroups" id="wGroups"></div>
+
+        <div class="wfoot">
+          <span class="hint" id="wFootHint"></span>
+          <button class="btn btn-ghost" id="btnWeightReset" type="button" data-i18n="setReset">恢复默认权重</button>
+        </div>
+      </div>
+    </section>
+
+    <!-- 其余配置项：本版本仍为占位，仅梳理现行口径 -->
+    <section class="card">
+      <div class="card-head">
+        <div class="card-title">
+          <h2 data-i18n="setOtherT">其他配置</h2>
+          <p class="card-sub" data-i18n="setOtherD">分组阈值、热点行业名单与基础过滤条件仍按后端配置生效，界面化编辑待后续版本开放</p>
+        </div>
+        <span class="pill pill-muted" data-i18n="setBadge">规划中</span>
+      </div>
+      <div class="card-body">
         <div class="set-grid" id="setGrid">
-          <article class="set-item">
-            <div class="set-item-head">
-              <h3 data-i18n="setWeightT">指标权重配置</h3>
-              <span class="tag" data-i18n="setTagPlanned">规划中</span>
-            </div>
-            <p class="set-desc" data-i18n="setWeightD">调整三大模块与各细分项的得分权重，用于比较不同口径下的匹配结果差异。</p>
-            <p class="set-now"><span class="set-now-label" data-i18n="setNowLabel">现行口径</span><span data-i18n="setWeightNow">核心形态 0–50 ＋ 筹码基本面 0–20 ＋ 行业板块 0–30</span></p>
-          </article>
           <article class="set-item">
             <div class="set-item-head">
               <h3 data-i18n="setThreshT">分组阈值</h3>
@@ -565,8 +585,8 @@
   </div>
 </aside>
 
-<script src="/static/i18n.js?v=1.8.0"></script>
-<script src="/static/vendor/echarts.min.js?v=1.8.0"></script>
-<script src="/static/app.js?v=1.8.0"></script>
+<script src="/static/i18n.js?v=1.9.0"></script>
+<script src="/static/vendor/echarts.min.js?v=1.9.0"></script>
+<script src="/static/app.js?v=1.9.0"></script>
 </body>
 </html>
