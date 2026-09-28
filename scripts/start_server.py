@@ -18,6 +18,7 @@ WMI 不可用时回退到 `DETACHED_PROCESS | CREATE_NEW_PROCESS_GROUP`。
 from __future__ import annotations
 
 import argparse
+import importlib.util
 import os
 import subprocess
 import sys
@@ -118,10 +119,40 @@ def wait_health(port: int, timeout: float = 30.0) -> bool:
     return False
 
 
+def missing_deps() -> list[str]:
+    """检查当前解释器是否具备启动服务所需的依赖。"""
+    return [m for m in ("fastapi", "uvicorn") if importlib.util.find_spec(m) is None]
+
+
+def venv_hint() -> str:
+    """返回项目内虚拟环境解释器的候选路径（仅用于报错指引，找不到返回空串）。"""
+    for p in (
+        ROOT / ".venv" / "Scripts" / "python.exe",
+        ROOT / "venv" / "Scripts" / "python.exe",
+        ROOT / ".venv" / "bin" / "python",
+    ):
+        if p.exists():
+            return str(p)
+    return ""
+
+
 def main() -> int:
     parser = argparse.ArgumentParser(description="重启本地看板服务")
     parser.add_argument("--port", type=int, default=8765)
     args = parser.parse_args()
+
+    # 依赖预检：本脚本用 sys.executable 拉起服务端进程，选错解释器会先打印
+    # 「已通过 WMI 启动」再在日志深处留下 ModuleNotFoundError，必须提前拦住。
+    missing = missing_deps()
+    if missing:
+        print(f"当前解释器缺少依赖: {', '.join(missing)}")
+        print(f"  解释器: {sys.executable}")
+        hint = venv_hint()
+        if hint:
+            print(f"  请改用: {hint} scripts/start_server.py --port {args.port}")
+        else:
+            print("  请改用已安装 requirements.txt 依赖的解释器")
+        return 2
 
     pids = listening_pids(args.port)
     if pids:

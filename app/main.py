@@ -16,6 +16,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse
 from fastapi.staticfiles import StaticFiles
 
+from app import db
 from app.config import API_HOST, API_PORT, PROJECT_ROOT
 from app.routers import analysis, backtest, market, news, pool, scan_api
 from app.routers import report as report_api
@@ -51,14 +52,30 @@ def _warm_news_cache() -> None:
         logger.warning("市场资讯缓存预热失败: %s", exc)
 
 
+def _cleanup_stale_runs() -> None:
+    """清理上次进程被强杀时残留的「永远 running」扫描批次（失败不影响主流程）。
+
+    不做这件事的后果：残留批次没有结果却排在 scan_runs 最后，被当成
+    「最新批次」，前端据此请求候选池 / 导出 / 简报时会全部返回空数据。
+    """
+    try:
+        with db.get_conn() as conn:
+            n = db.mark_stale_runs(conn)
+        if n:
+            logger.info("已清理残留扫描批次 %d 条（标记为 interrupted）", n)
+    except Exception as exc:  # noqa: BLE001
+        logger.warning("清理残留扫描批次失败: %s", exc)
+
+
 @asynccontextmanager
 async def lifespan(_app: FastAPI):
-    """应用生命周期：启动时后台预热指数快照。
+    """应用生命周期：启动时清理残留批次并后台预热指数快照。
 
     指数行情源在本机环境下首次请求可能耗时数秒到数十秒；若等用户打开
     看板时才去拉，宏观面板会长时间停留在占位状态。启动时预热一次，
     用户打开页面即可命中缓存（预热在线程中执行，不阻塞服务启动）。
     """
+    _cleanup_stale_runs()
     threading.Thread(target=_warm_index_cache, daemon=True).start()
     threading.Thread(target=_warm_news_cache, daemon=True).start()
     yield

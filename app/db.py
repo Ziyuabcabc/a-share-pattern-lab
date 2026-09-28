@@ -278,6 +278,23 @@ def latest_result_run(conn: sqlite3.Connection) -> sqlite3.Row | None:
     ).fetchone()
 
 
+def mark_stale_runs(conn: sqlite3.Connection, reason: str = "服务重启中断") -> int:
+    """把残留的 running 批次标记为 interrupted，返回受影响行数。
+
+    扫描在服务进程内的后台线程中执行，进程被强杀（关机 / 崩溃 / 掉线）时
+    finish_run 不会被调用，scan_runs 会留下永远停留在 running 的僵尸记录。
+    这类记录没有任何结果，却会被读接口当成「最新批次」——前端把它的 id
+    带进候选池 / 导出 / 简报请求后全部拿到空数据。服务启动即代表当前没有
+    任何扫描在执行，此时清理是安全的。
+    """
+    cur = conn.execute(
+        "UPDATE scan_runs SET status='interrupted', finished_at=?, message=? "
+        "WHERE status='running'",
+        (datetime.now().isoformat(timespec="seconds"), reason),
+    )
+    return int(cur.rowcount or 0)
+
+
 def save_results(
     conn: sqlite3.Connection, run_id: int, results: list[dict]
 ) -> None:
@@ -319,7 +336,7 @@ def query_results(
 ) -> list[dict]:
     """查询候选池结果，支持分数/行业/板块过滤与排序。"""
     if run_id is None:
-        row = latest_run(conn)
+        row = latest_result_run(conn)
         run_id = int(row["id"]) if row else 0
     sql = ["SELECT * FROM scan_results WHERE run_id=?"]
     params: list[Any] = [run_id]

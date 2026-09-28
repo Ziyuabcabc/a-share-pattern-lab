@@ -67,8 +67,16 @@ def run_scan(
 
 @router.get("/status", summary="扫描运行状态与最近批次统计")
 def scan_status():
+    """返回扫描运行状态与「当前应当展示的数据批次」。
+
+    latest_run 取的是最近一次**成功完成**的批次，而不是 scan_runs 里
+    最后一条记录。原因：扫描启动后先插入一条 running 记录（尚无任何结果），
+    若取最后一条，扫描期间或进程被强杀后，该批次会被前端当作当前批次，
+    其 id 带进候选池 / 导出 / 简报请求后全部返回空数据。这与 pool / market /
+    report 等读路径「统一取最近成功批次」的口径保持一致。
+    """
     with db.get_conn() as conn:
-        latest = db.latest_run(conn)
+        latest = db.latest_result_run(conn)
     with _state_lock:
         running = _state["running"]
         progress = list(_state["progress"])
