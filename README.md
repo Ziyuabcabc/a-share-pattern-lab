@@ -201,7 +201,7 @@
 ### 安装
 
 ```bash
-git clone https://github.com/<your-name>/a-share-pattern-lab.git
+git clone https://github.com/Ziyuabcabc/a-share-pattern-lab.git
 cd a-share-pattern-lab
 
 # 建议使用虚拟环境
